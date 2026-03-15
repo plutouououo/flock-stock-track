@@ -1,0 +1,10 @@
+{
+  "name": "PoultryMart - Sales Manager",
+  "short_name": "PoultryMart",
+  "description": "Sales management for poultry products: record sales, manage products, view reports",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#faf8f6",
+  "theme_color": "#e67e22",
+  "orientation": "any"
+}
