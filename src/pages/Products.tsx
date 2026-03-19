@@ -1,32 +1,16 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Package, Plus, Search, Pencil, Trash2, Upload, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ProductFormDialog, type ProductFormValues } from "@/components/ProductFormDialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProducts, useAddProduct, useUpdateProduct, useDeleteProduct, queryKeys } from "@/lib/queries";
 import { getProductStock, addProduct as addProductStorage } from "@/lib/storage";
 import { parseProductXls, type ProductImportRow } from "@/lib/import-xls";
-import type { Product } from "@/types";
+import type { Product, ProductBatch } from "@/types";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +20,36 @@ function formatRupiah(n: number): string {
 
 function formatDate(s: string): string {
   return new Date(s).toISOString().slice(0, 10);
+}
+
+// Custom hook untuk menghitung stock dengan async
+function useProductStock(product: Product) {
+  const [stock, setStock] = useState<number>(0);
+  const [lowStock, setLowStock] = useState<boolean>(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function calculateStock() {
+      try {
+        const totalStock = await getProductStock(product);
+        if (mounted) {
+          setStock(totalStock);
+          setLowStock(product.threshold > 0 && totalStock <= product.threshold);
+        }
+      } catch (error) {
+        console.error('Error calculating stock:', error);
+      }
+    }
+
+    calculateStock();
+
+    return () => {
+      mounted = false;
+    };
+  }, [product]);
+
+  return { stock, lowStock };
 }
 
 export default function Products() {
@@ -50,6 +64,38 @@ export default function Products() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [importing, setImporting] = useState(false);
+  const [productStockMap, setProductStockMap] = useState<Map<string, { stock: number; lowStock: boolean }>>(new Map());
+
+  // Load stock for all products
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadAllStocks() {
+      const stockMap = new Map();
+      for (const product of products) {
+        try {
+          const stock = await getProductStock(product);
+          const lowStock = product.threshold > 0 && stock <= product.threshold;
+          if (mounted) {
+            stockMap.set(product.id, { stock, lowStock });
+          }
+        } catch (error) {
+          console.error(`Error loading stock for product ${product.id}:`, error);
+        }
+      }
+      if (mounted) {
+        setProductStockMap(stockMap);
+      }
+    }
+
+    if (products.length > 0) {
+      loadAllStocks();
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [products]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return products;
@@ -63,13 +109,18 @@ export default function Products() {
 
   const handleSubmit = (values: ProductFormValues) => {
     const now = new Date().toISOString();
+    
     if (editingProduct) {
-      const batches = values.batches.map((b) => ({
+      const batches: ProductBatch[] = values.batches.map((b) => ({
         id: crypto.randomUUID(),
+        product_id: editingProduct.id,
         quantity: b.quantity,
+        expiry_date: b.expiryDate,
+        created_at: now,
         expiryDate: b.expiryDate,
-        receivedAt: now,
+        createdAt: now,
       }));
+
       updateProduct.mutate(
         {
           id: editingProduct.id,
@@ -78,6 +129,7 @@ export default function Products() {
             price: values.price,
             threshold: values.threshold,
             imageUrl: values.imageUrl || undefined,
+            image_url: values.imageUrl || undefined,
             batches,
           },
         },
@@ -91,12 +143,15 @@ export default function Products() {
         }
       );
     } else {
-      const batches = values.batches.map((b) => ({
+      const batches: Omit<ProductBatch, "product_id">[] = values.batches.map((b) => ({
         id: crypto.randomUUID(),
         quantity: b.quantity,
+        expiry_date: b.expiryDate,
+        created_at: now,
         expiryDate: b.expiryDate,
-        receivedAt: now,
+        createdAt: now,
       }));
+
       addProduct.mutate(
         {
           name: values.name,
@@ -104,7 +159,8 @@ export default function Products() {
           price: values.price,
           threshold: values.threshold,
           imageUrl: values.imageUrl || undefined,
-          batches,
+          image_url: values.imageUrl || undefined,
+          batches: batches as ProductBatch[],
         },
         {
           onSuccess: () => {
@@ -123,16 +179,25 @@ export default function Products() {
     setDialogOpen(true);
   };
 
-  const handleDelete = (p: Product) => {
-    if (getProductStock(p) > 0) {
+  const handleDelete = async (p: Product) => {
+    try {
+      const stock = await getProductStock(p);
+      if (stock > 0) {
+        toast({
+          title: "Cannot delete",
+          description: "Reduce stock to zero first or remove batches.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setDeleteTarget(p);
+    } catch (error) {
       toast({
-        title: "Cannot delete",
-        description: "Reduce stock to zero first or remove batches.",
+        title: "Error",
+        description: "Failed to check product stock",
         variant: "destructive",
       });
-      return;
     }
-    setDeleteTarget(p);
   };
 
   const confirmDelete = () => {
@@ -151,39 +216,58 @@ export default function Products() {
     if (!file) return;
     setImporting(true);
     e.target.value = "";
+    
     try {
       const rows: ProductImportRow[] = await parseProductXls(file);
       if (rows.length === 0) {
-        toast({ title: "No valid rows", description: "Check column names: name, sku, price, threshold, quantity, expiryDate", variant: "destructive" });
+        toast({ 
+          title: "No valid rows", 
+          description: "Check column names: name, sku, price, threshold, quantity, expiryDate", 
+          variant: "destructive" 
+        });
         return;
       }
+
       const existingSkus = new Set(products.map((p) => p.sku.toLowerCase()));
       let added = 0;
       let skipped = 0;
       const now = new Date().toISOString();
+      
       for (const row of rows) {
         if (existingSkus.has(row.sku.toLowerCase())) {
           skipped++;
           continue;
         }
-        addProductStorage({
-          name: row.name,
-          sku: row.sku,
-          price: row.price,
-          threshold: row.threshold,
-          batches: [
-            {
-              id: crypto.randomUUID(),
-              quantity: row.quantity,
-              expiryDate: row.expiryDate,
-              receivedAt: now,
-            },
-          ],
-        });
-        existingSkus.add(row.sku.toLowerCase());
-        added++;
+        
+        const batches: ProductBatch[] = [{
+          id: crypto.randomUUID(),
+          product_id: "",
+          quantity: row.quantity,
+          expiry_date: row.expiryDate,
+          created_at: now,
+          expiryDate: row.expiryDate,
+          createdAt: now,
+        }];
+
+        try {
+          await addProductStorage({
+            name: row.name,
+            sku: row.sku,
+            price: row.price,
+            threshold: row.threshold,
+            image_url: undefined,
+            imageUrl: undefined,
+            batches,
+          });
+          
+          existingSkus.add(row.sku.toLowerCase());
+          added++;
+        } catch (error) {
+          console.error('Failed to import product:', row.sku, error);
+        }
       }
-      queryClient.invalidateQueries({ queryKey: queryKeys.products });
+      
+      await queryClient.invalidateQueries({ queryKey: queryKeys.products });
       toast({
         title: "Import done",
         description: `Added ${added} product(s)${skipped ? `, skipped ${skipped} duplicate SKU(s)` : ""}.`,
@@ -215,10 +299,10 @@ export default function Products() {
               onChange={handleImport}
               disabled={importing}
             />
-            <Button variant="outline" className="gap-2" asChild>
+            <Button variant="outline" className="gap-2" asChild disabled={importing}>
               <span>
                 <Upload className="h-4 w-4" />
-                Import XLS
+                {importing ? "Importing..." : "Import XLS"}
               </span>
             </Button>
           </label>
@@ -274,43 +358,52 @@ export default function Products() {
             </TableHeader>
             <TableBody>
               {filtered.map((p) => {
-                const stock = getProductStock(p);
-                const lowStock = p.threshold > 0 && stock <= p.threshold;
-                const sortedBatches = [...p.batches].sort(
-                  (a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime()
+                const stockInfo = productStockMap.get(p.id) || { stock: 0, lowStock: false };
+                const sortedBatches = [...(p.batches || [])].sort(
+                  (a, b) => new Date(a.expiry_date || a.expiryDate || '').getTime() - 
+                           new Date(b.expiry_date || b.expiryDate || '').getTime()
                 );
+
                 return (
                   <TableRow key={p.id}>
                     <TableCell>
                       <Avatar className="h-10 w-10 rounded-md">
-                        <AvatarImage src={p.imageUrl} alt={p.name} className="object-cover" />
+                        <AvatarImage src={p.imageUrl || p.image_url} alt={p.name} className="object-cover" />
                         <AvatarFallback className="rounded-md bg-muted text-xs">
                           {p.name.slice(0, 2).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
                     </TableCell>
                     <TableCell>
-                      <span className={cn(lowStock && "font-medium text-warning")}>{p.name}</span>
+                      <span className={cn(stockInfo.lowStock && "font-medium text-warning")}>
+                        {p.name}
+                      </span>
                     </TableCell>
                     <TableCell className="font-mono text-sm">{p.sku}</TableCell>
                     <TableCell className="text-right">{formatRupiah(p.price)}</TableCell>
                     <TableCell className="text-right">
-                      <span className={cn(lowStock && "text-warning font-medium")}>
-                        {stock}
-                        {lowStock && <AlertTriangle className="inline h-3.5 w-3 ml-1 text-warning" />}
+                      <span className={cn(stockInfo.lowStock && "text-warning font-medium")}>
+                        {stockInfo.stock}
+                        {stockInfo.lowStock && (
+                          <AlertTriangle className="inline h-3.5 w-3 ml-1 text-warning" />
+                        )}
                       </span>
                     </TableCell>
                     <TableCell className="text-right text-muted-foreground">{p.threshold}</TableCell>
                     <TableCell className="text-center text-xs text-muted-foreground">
-                      {sortedBatches.length === 0
-                        ? "—"
-                        : sortedBatches.slice(0, 2).map((b) => (
+                      {sortedBatches.length === 0 ? (
+                        "—"
+                      ) : (
+                        <>
+                          {sortedBatches.slice(0, 2).map((b) => (
                             <span key={b.id} className="block">
-                              {b.quantity} → {formatDate(b.expiryDate)}
+                              {b.quantity} → {formatDate(b.expiry_date || b.expiryDate || '')}
                             </span>
                           ))}
-                      {sortedBatches.length > 2 && (
-                        <span className="block">+{sortedBatches.length - 2} more</span>
+                          {sortedBatches.length > 2 && (
+                            <span className="block">+{sortedBatches.length - 2} more</span>
+                          )}
+                        </>
                       )}
                     </TableCell>
                     <TableCell>
