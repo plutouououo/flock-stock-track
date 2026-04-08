@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { ClipboardList, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,11 +29,91 @@ import {
 import { useProducts, useShoppingList, useAddShoppingListItem, useUpdateShoppingList, useRemoveShoppingListItem } from "@/lib/queries";
 import { getProductStock } from "@/lib/storage";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
+import type { Product } from "@/types";
+
+// Custom hook untuk mengelola stock products
+function useProductsWithStock() {
+  const { data: products = [] } = useProducts();
+  const [productStockMap, setProductStockMap] = useState<Map<string, number>>(new Map());
+  const [loadingStock, setLoadingStock] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadStocks() {
+      setLoadingStock(true);
+      const stockMap = new Map();
+      
+      for (const product of products) {
+        try {
+          const stock = await getProductStock(product);
+          if (mounted) {
+            stockMap.set(product.id, stock);
+          }
+        } catch (error) {
+          console.error(`Error loading stock for product ${product.id}:`, error);
+          if (mounted) {
+            stockMap.set(product.id, 0);
+          }
+        }
+      }
+      
+      if (mounted) {
+        setProductStockMap(stockMap);
+        setLoadingStock(false);
+      }
+    }
+
+    if (products.length > 0) {
+      loadStocks();
+    } else {
+      setLoadingStock(false);
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [products]);
+
+  const getStock = (productId: string): number => {
+    return productStockMap.get(productId) || 0;
+  };
+
+  const getProductStockValue = (product: Product): number => {
+    return getStock(product.id);
+  };
+
+  const getLowStockProducts = (): Product[] => {
+    return products
+      .filter((p) => p.threshold > 0 && getStock(p.id) <= p.threshold)
+      .sort((a, b) => getStock(a.id) - getStock(b.id));
+  };
+
+  return {
+    products,
+    loadingStock,
+    getStock,
+    getProductStockValue,
+    getLowStockProducts,
+  };
+}
 
 export default function ShoppingList() {
-  const { data: products = [] } = useProducts();
+  const { products, getStock, getProductStockValue, getLowStockProducts } = useProductsWithStock();
   const { data: list = [] } = useShoppingList();
+  // Tambah di dalam komponen, setelah const { data: list = [] }
+  const enrichedList = useMemo(() => {
+    return list.map((item) => {
+      const product = products.find(
+        (p) => p.id === (item.productId)  // handle kedua format
+      );
+      return {
+        ...item,
+        productName: product?.name ?? "Unknown product",
+        sku: product?.sku ?? "—",
+      };
+    });
+  }, [list, products]);
   const addItem = useAddShoppingListItem();
   const updateList = useUpdateShoppingList();
   const removeItem = useRemoveShoppingListItem();
@@ -43,11 +123,8 @@ export default function ShoppingList() {
   const [quantity, setQuantity] = useState("1");
 
   const lowStockProducts = useMemo(
-    () =>
-      products
-        .filter((p) => p.threshold > 0 && getProductStock(p) <= p.threshold)
-        .sort((a, b) => getProductStock(a) - getProductStock(b)),
-    [products]
+    () => getLowStockProducts(),
+    [getLowStockProducts]
   );
 
   const handleAdd = () => {
@@ -60,9 +137,8 @@ export default function ShoppingList() {
     addItem.mutate(
       {
         productId: product.id,
-        productName: product.name,
-        sku: product.sku,
         quantity: qty,
+        isOrdered: false,
       },
       {
         onSuccess: () => {
@@ -77,11 +153,19 @@ export default function ShoppingList() {
   };
 
   const toggleChecked = (id: string, checked: boolean) => {
-    updateList.mutate([{ id, checked }]);
+    updateList.mutate([{ id, checked, isOrdered: checked }]);
   };
 
   const handleRemove = (id: string) => {
     removeItem.mutate(id);
+  };
+
+  const handleAddFromLowStock = (product: Product) => {
+    const currentStock = getStock(product.id);
+    const suggestedQty = Math.max(1, product.threshold - currentStock + 1);
+    setSelectedProductId(product.id);
+    setQuantity(String(suggestedQty));
+    setAddOpen(true);
   };
 
   return (
@@ -98,7 +182,7 @@ export default function ShoppingList() {
       </div>
 
       <div className="card-elevated-md overflow-hidden">
-        {list.length === 0 ? (
+        {enrichedList.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
             <ClipboardList className="h-12 w-12 mb-4 opacity-30" />
             <p className="font-medium">Shopping list is empty</p>
@@ -123,7 +207,7 @@ export default function ShoppingList() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {list.map((item) => (
+              {enrichedList.map((item) => (
                 <TableRow key={item.id} className={item.checked ? "opacity-60" : ""}>
                   <TableCell>
                     <Checkbox
@@ -158,28 +242,27 @@ export default function ShoppingList() {
             These products are at or below their threshold.
           </p>
           <ul className="space-y-2">
-            {lowStockProducts.map((p) => (
-              <li key={p.id} className="flex items-center justify-between rounded-lg border p-3">
-                <div>
-                  <p className="font-medium">{p.name}</p>
-                  <p className="text-xs text-muted-foreground font-mono">
-                    {p.sku} · Stock: {getProductStock(p)} (threshold: {p.threshold})
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setSelectedProductId(p.id);
-                    setQuantity(String(Math.max(1, p.threshold - getProductStock(p) + 1)));
-                    setAddOpen(true);
-                  }}
-                >
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add to list
-                </Button>
-              </li>
-            ))}
+            {lowStockProducts.map((p) => {
+              const currentStock = getStock(p.id);
+              return (
+                <li key={p.id} className="flex items-center justify-between rounded-lg border p-3">
+                  <div>
+                    <p className="font-medium">{p.name}</p>
+                    <p className="text-xs text-muted-foreground font-mono">
+                      {p.sku} · Stock: {currentStock} (threshold: {p.threshold})
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleAddFromLowStock(p)}
+                  >
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add to list
+                  </Button>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -197,11 +280,14 @@ export default function ShoppingList() {
                   <SelectValue placeholder="Choose product" />
                 </SelectTrigger>
                 <SelectContent>
-                  {products.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name} ({p.sku})
-                    </SelectItem>
-                  ))}
+                  {products.map((p) => {
+                    const stock = getStock(p.id);
+                    return (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name} ({p.sku}) - Stock: {stock}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>

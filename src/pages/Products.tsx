@@ -1,32 +1,17 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Package, Plus, Search, Pencil, Trash2, Upload, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ProductFormDialog, type ProductFormValues } from "@/components/ProductFormDialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProducts, useAddProduct, useUpdateProduct, useDeleteProduct, queryKeys } from "@/lib/queries";
+import { useAuth } from "@/hooks/useAuth";
 import { getProductStock, addProduct as addProductStorage } from "@/lib/storage";
 import { parseProductXls, type ProductImportRow } from "@/lib/import-xls";
-import type { Product } from "@/types";
+import type { Product, ProductBatch } from "@/types";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +26,8 @@ function formatDate(s: string): string {
 export default function Products() {
   const queryClient = useQueryClient();
   const { data: products = [], isLoading } = useProducts();
+  const { role } = useAuth();
+  const isCashier = role === "cashier";
   const addProduct = useAddProduct();
   const updateProduct = useUpdateProduct();
   const deleteProduct = useDeleteProduct();
@@ -50,6 +37,38 @@ export default function Products() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [importing, setImporting] = useState(false);
+  const [productStockMap, setProductStockMap] = useState<Map<string, { stock: number; lowStock: boolean }>>(new Map());
+
+  // Load stock for all products
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadAllStocks() {
+      const stockMap = new Map();
+      for (const product of products) {
+        try {
+          const stock = await getProductStock(product);
+          const lowStock = product.threshold > 0 && stock <= product.threshold;
+          if (mounted) {
+            stockMap.set(product.id, { stock, lowStock });
+          }
+        } catch (error) {
+          console.error(`Error loading stock for product ${product.id}:`, error);
+        }
+      }
+      if (mounted) {
+        setProductStockMap(stockMap);
+      }
+    }
+
+    if (products.length > 0) {
+      loadAllStocks();
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [products]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return products;
@@ -63,13 +82,18 @@ export default function Products() {
 
   const handleSubmit = (values: ProductFormValues) => {
     const now = new Date().toISOString();
+
     if (editingProduct) {
-      const batches = values.batches.map((b) => ({
+      const batches: ProductBatch[] = values.batches.map((b) => ({
         id: crypto.randomUUID(),
+        product_id: editingProduct.id,
         quantity: b.quantity,
+        expiry_date: b.expiryDate,
+        created_at: now,
         expiryDate: b.expiryDate,
-        receivedAt: now,
+        createdAt: now,
       }));
+
       updateProduct.mutate(
         {
           id: editingProduct.id,
@@ -77,6 +101,7 @@ export default function Products() {
             name: values.name,
             price: values.price,
             threshold: values.threshold,
+            category: values.category as any,
             imageUrl: values.imageUrl || undefined,
             batches,
           },
@@ -91,20 +116,24 @@ export default function Products() {
         }
       );
     } else {
-      const batches = values.batches.map((b) => ({
+      const batches: Omit<ProductBatch, "product_id">[] = values.batches.map((b) => ({
         id: crypto.randomUUID(),
         quantity: b.quantity,
+        expiry_date: b.expiryDate,
+        created_at: now,
         expiryDate: b.expiryDate,
-        receivedAt: now,
+        createdAt: now,
       }));
+
       addProduct.mutate(
         {
           name: values.name,
           sku: values.sku,
           price: values.price,
           threshold: values.threshold,
+          category: values.category as any,
           imageUrl: values.imageUrl || undefined,
-          batches,
+          batches: batches as ProductBatch[],
         },
         {
           onSuccess: () => {
@@ -123,16 +152,25 @@ export default function Products() {
     setDialogOpen(true);
   };
 
-  const handleDelete = (p: Product) => {
-    if (getProductStock(p) > 0) {
+  const handleDelete = async (p: Product) => {
+    try {
+      const stock = await getProductStock(p);
+      if (stock > 0) {
+        toast({
+          title: "Cannot delete",
+          description: "Reduce stock to zero first or remove batches.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setDeleteTarget(p);
+    } catch (error) {
       toast({
-        title: "Cannot delete",
-        description: "Reduce stock to zero first or remove batches.",
+        title: "Error",
+        description: "Failed to check product stock",
         variant: "destructive",
       });
-      return;
     }
-    setDeleteTarget(p);
   };
 
   const confirmDelete = () => {
@@ -147,57 +185,77 @@ export default function Products() {
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImporting(true);
-    e.target.value = "";
-    try {
-      const rows: ProductImportRow[] = await parseProductXls(file);
-      if (rows.length === 0) {
-        toast({ title: "No valid rows", description: "Check column names: name, sku, price, threshold, quantity, expiryDate", variant: "destructive" });
-        return;
+  const file = e.target.files?.[0];
+  if (!file) return;
+  setImporting(true);
+  e.target.value = "";
+
+  try {
+    const rows: ProductImportRow[] = await parseProductXls(file);
+    if (rows.length === 0) {
+      toast({
+        title: "No valid rows",
+        description: "Check column names: name, sku, price, threshold, quantity, expiryDate",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const existingSkus = new Set(products.map((p) => p.sku.toLowerCase()));
+    let added = 0;
+    let skipped = 0;
+    const now = new Date().toISOString();
+
+    for (const row of rows) {
+      // ✅ Skip duplicate SKU
+      if (existingSkus.has(row.sku.toLowerCase())) {
+        skipped++;
+        continue;
       }
-      const existingSkus = new Set(products.map((p) => p.sku.toLowerCase()));
-      let added = 0;
-      let skipped = 0;
-      const now = new Date().toISOString();
-      for (const row of rows) {
-        if (existingSkus.has(row.sku.toLowerCase())) {
-          skipped++;
-          continue;
-        }
-        addProductStorage({
+
+      try {
+        // ✅ Kirim batch dengan quantity dan expiryDate dari XLS
+        await addProduct.mutateAsync({
           name: row.name,
           sku: row.sku,
           price: row.price,
           threshold: row.threshold,
+          imageUrl: undefined,
           batches: [
             {
               id: crypto.randomUUID(),
+              productId: "",           // storage.ts akan override ini
               quantity: row.quantity,
               expiryDate: row.expiryDate,
-              receivedAt: now,
+              costPerUnit: 0,
+              createdAt: now,
             },
           ],
         });
-        existingSkus.add(row.sku.toLowerCase());
+
+        existingSkus.add(row.sku.toLowerCase()); // ✅ Cegah duplikat dalam file yang sama
         added++;
+      } catch (err) {
+        console.error("Failed to import product:", row.sku, err);
+        skipped++;
       }
-      queryClient.invalidateQueries({ queryKey: queryKeys.products });
-      toast({
-        title: "Import done",
-        description: `Added ${added} product(s)${skipped ? `, skipped ${skipped} duplicate SKU(s)` : ""}.`,
-      });
-    } catch (err) {
-      toast({
-        title: "Import failed",
-        description: err instanceof Error ? err.message : String(err),
-        variant: "destructive",
-      });
-    } finally {
-      setImporting(false);
     }
-  };
+
+    await queryClient.invalidateQueries({ queryKey: queryKeys.products });
+    toast({
+      title: "Import selesai",
+      description: `Berhasil menambah ${added} produk${skipped ? `, ${skipped} dilewati` : ""}.`,
+    });
+  } catch (err) {
+    toast({
+      title: "Import gagal",
+      description: err instanceof Error ? err.message : String(err),
+      variant: "destructive",
+    });
+  } finally {
+    setImporting(false);
+  }
+};
 
   return (
     <div className="space-y-6">
@@ -207,31 +265,35 @@ export default function Products() {
           <p className="page-description">Manage your poultry product catalog</p>
         </div>
         <div className="flex gap-2">
-          <label className="cursor-pointer">
-            <input
-              type="file"
-              accept=".xls,.xlsx"
-              className="hidden"
-              onChange={handleImport}
-              disabled={importing}
-            />
-            <Button variant="outline" className="gap-2" asChild>
-              <span>
-                <Upload className="h-4 w-4" />
-                Import XLS
-              </span>
-            </Button>
-          </label>
-          <Button
-            className="gap-2"
-            onClick={() => {
-              setEditingProduct(null);
-              setDialogOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            Add Product
-          </Button>
+          {!isCashier && (
+            <>
+              <label className="cursor-pointer">
+                <input
+                  type="file"
+                  accept=".xls,.xlsx"
+                  className="hidden"
+                  onChange={handleImport}
+                  disabled={importing}
+                />
+                <Button variant="outline" className="gap-2" asChild disabled={importing}>
+                  <span>
+                    <Upload className="h-4 w-4" />
+                    {importing ? "Importing..." : "Import XLS"}
+                  </span>
+                </Button>
+              </label>
+              <Button
+                className="gap-2"
+                onClick={() => {
+                  setEditingProduct(null);
+                  setDialogOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                Add Product
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -264,21 +326,22 @@ export default function Products() {
               <TableRow>
                 <TableHead className="w-12">Image</TableHead>
                 <TableHead>Name</TableHead>
-                <TableHead>SKU</TableHead>
+                <TableHead className="min-w-[120px]">SKU</TableHead>
                 <TableHead className="text-right">Price</TableHead>
                 <TableHead className="text-right">Stock</TableHead>
                 <TableHead className="text-right">Threshold</TableHead>
                 <TableHead className="text-center">Batches / Expiry</TableHead>
-                <TableHead className="w-24">Actions</TableHead>
+                {!isCashier && <TableHead className="w-24">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.map((p) => {
-                const stock = getProductStock(p);
-                const lowStock = p.threshold > 0 && stock <= p.threshold;
-                const sortedBatches = [...p.batches].sort(
-                  (a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime()
+                const stockInfo = productStockMap.get(p.id) || { stock: 0, lowStock: false };
+                const sortedBatches = [...(p.batches || [])].sort(
+                  (a, b) => new Date(a.expiryDate || '').getTime() - 
+                           new Date(b.expiryDate || '').getTime()
                 );
+
                 return (
                   <TableRow key={p.id}>
                     <TableCell>
@@ -290,44 +353,59 @@ export default function Products() {
                       </Avatar>
                     </TableCell>
                     <TableCell>
-                      <span className={cn(lowStock && "font-medium text-warning")}>{p.name}</span>
+                      <span className={cn(stockInfo.lowStock && "font-medium text-warning")}>
+                        {p.name}
+                      </span>
                     </TableCell>
-                    <TableCell className="font-mono text-sm">{p.sku}</TableCell>
+                    <TableCell className="font-mono text-sm min-w-[120px]">{p.sku}</TableCell>
                     <TableCell className="text-right">{formatRupiah(p.price)}</TableCell>
                     <TableCell className="text-right">
-                      <span className={cn(lowStock && "text-warning font-medium")}>
-                        {stock}
-                        {lowStock && <AlertTriangle className="inline h-3.5 w-3 ml-1 text-warning" />}
+                      <span className={cn(stockInfo.lowStock && "text-warning font-medium")}>
+                        {stockInfo.stock}
+                        {stockInfo.lowStock && (
+                          <AlertTriangle className="inline h-3.5 w-3 ml-1 text-warning" />
+                        )}
                       </span>
                     </TableCell>
                     <TableCell className="text-right text-muted-foreground">{p.threshold}</TableCell>
                     <TableCell className="text-center text-xs text-muted-foreground">
-                      {sortedBatches.length === 0
-                        ? "—"
-                        : sortedBatches.slice(0, 2).map((b) => (
+                      {sortedBatches.length === 0 ? (
+                        "—"
+                      ) : (
+                        <>
+                          {sortedBatches.slice(0, 2).map((b) => (
                             <span key={b.id} className="block">
-                              {b.quantity} → {formatDate(b.expiryDate)}
+                              {b.quantity} → {formatDate(b.expiryDate || '')}
                             </span>
                           ))}
-                      {sortedBatches.length > 2 && (
-                        <span className="block">+{sortedBatches.length - 2} more</span>
+                          {sortedBatches.length > 2 && (
+                            <span className="block">+{sortedBatches.length - 2} more</span>
+                          )}
+                        </>
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => handleEdit(p)} title="Edit">
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDelete(p)}
-                          title="Delete"
-                          className="text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                      {!isCashier && (
+                        <div className="flex gap-1">
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            onClick={() => handleEdit(p)} 
+                            title="Edit"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(p)}
+                            title="Delete"
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 );

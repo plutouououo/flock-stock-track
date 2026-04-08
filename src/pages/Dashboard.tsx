@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Package, ShoppingCart, TrendingUp, AlertTriangle } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useProducts, useSales } from "@/lib/queries";
 import { getProductStock } from "@/lib/storage";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
+import type { Product } from "@/types";
 
 function formatRupiah(n: number): string {
   return new Intl.NumberFormat("id-ID", {
@@ -14,20 +15,95 @@ function formatRupiah(n: number): string {
   }).format(n);
 }
 
-export default function Dashboard() {
+// Custom hook untuk mengelola stock products
+function useProductsWithStock() {
   const { data: products = [] } = useProducts();
+  const [productStockMap, setProductStockMap] = useState<Map<string, number>>(new Map());
+  const [loadingStock, setLoadingStock] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadStocks() {
+      setLoadingStock(true);
+      const stockMap = new Map();
+      
+      for (const product of products) {
+        try {
+          const stock = await getProductStock(product);
+          if (mounted) {
+            stockMap.set(product.id, stock);
+          }
+        } catch (error) {
+          console.error(`Error loading stock for product ${product.id}:`, error);
+          if (mounted) {
+            stockMap.set(product.id, 0);
+          }
+        }
+      }
+      
+      if (mounted) {
+        setProductStockMap(stockMap);
+        setLoadingStock(false);
+      }
+    }
+
+    if (products.length > 0) {
+      loadStocks();
+    } else {
+      setLoadingStock(false);
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [products]);
+
+  const getStock = (productId: string): number => {
+    return productStockMap.get(productId) || 0;
+  };
+
+  const getProductStockValue = (product: Product): number => {
+    return getStock(product.id);
+  };
+
+  const getLowStockProducts = (): Product[] => {
+    return products
+      .filter((p) => p.threshold > 0 && getStock(p.id) <= p.threshold)
+      .sort((a, b) => getStock(a.id) - getStock(b.id));
+  };
+
+  const getLowStockCount = (): number => {
+    return products.filter(
+      (p) => p.threshold > 0 && getStock(p.id) <= p.threshold
+    ).length;
+  };
+
+  return {
+    products,
+    loadingStock,
+    getStock,
+    getProductStockValue,
+    getLowStockProducts,
+    getLowStockCount,
+  };
+}
+
+export default function Dashboard() {
+  const { products, getStock, getLowStockProducts, getLowStockCount } = useProductsWithStock();
   const { data: sales = [] } = useSales();
 
   const stats = useMemo(() => {
     const today = format(new Date(), "yyyy-MM-dd");
     const thisMonth = format(new Date(), "yyyy-MM");
-    const todaySales = sales.filter((s) => s.createdAt.startsWith(today));
-    const monthSales = sales.filter((s) => s.createdAt.startsWith(thisMonth));
-    const todayRevenue = todaySales.reduce((sum, s) => sum + s.total, 0);
-    const monthRevenue = monthSales.reduce((sum, s) => sum + s.total, 0);
-    const lowStockCount = products.filter(
-      (p) => p.threshold > 0 && getProductStock(p) <= p.threshold
-    ).length;
+    
+    const todaySales = sales.filter((s) => s.createdAt?.startsWith(today));
+    const monthSales = sales.filter((s) => s.createdAt?.startsWith(thisMonth));
+    
+    const todayRevenue = todaySales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+    const monthRevenue = monthSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+    
+    const lowStockCount = getLowStockCount();
 
     return {
       todayRevenue,
@@ -35,22 +111,23 @@ export default function Dashboard() {
       monthRevenue,
       lowStockCount,
     };
-  }, [products, sales]);
+  }, [products, sales, getLowStockCount]);
 
   const recentSales = useMemo(
     () =>
       [...sales]
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .sort((a, b) => {
+          const dateA = a.createdAt || '';
+          const dateB = b.createdAt || '';
+          return dateB.localeCompare(dateA);
+        })
         .slice(0, 5),
     [sales]
   );
 
   const lowStockProducts = useMemo(
-    () =>
-      products
-        .filter((p) => p.threshold > 0 && getProductStock(p) <= p.threshold)
-        .slice(0, 5),
-    [products]
+    () => getLowStockProducts().slice(0, 5),
+    [getLowStockProducts]
   );
 
   return (
@@ -113,14 +190,20 @@ export default function Dashboard() {
             </div>
           ) : (
             <ul className="space-y-2">
-              {recentSales.map((s) => (
-                <li key={s.id} className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">
-                    {format(new Date(s.createdAt), "dd MMM, HH:mm")} · {s.customerType}
-                  </span>
-                  <span className="font-medium">{formatRupiah(s.total)}</span>
-                </li>
-              ))}
+              {recentSales.map((s) => {
+                const saleDate = s.createdAt || '';
+                const customerType = s.customerType || 'Unknown';
+                const total = s.totalAmount|| 0;
+                
+                return (
+                  <li key={s.id} className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      {saleDate ? format(new Date(saleDate), "dd MMM, HH:mm") : 'Unknown'} · {customerType}
+                    </span>
+                    <span className="font-medium">{formatRupiah(total)}</span>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -138,14 +221,17 @@ export default function Dashboard() {
             </div>
           ) : (
             <ul className="space-y-2">
-              {lowStockProducts.map((p) => (
-                <li key={p.id} className="flex justify-between text-sm">
-                  <span>{p.name}</span>
-                  <span className="text-warning font-medium">
-                    {getProductStock(p)} / {p.threshold}
-                  </span>
-                </li>
-              ))}
+              {lowStockProducts.map((p) => {
+                const stock = getStock(p.id);
+                return (
+                  <li key={p.id} className="flex justify-between text-sm">
+                    <span>{p.name}</span>
+                    <span className="text-warning font-medium">
+                      {stock} / {p.threshold}
+                    </span>
+                  </li>
+                );
+              })}
               <li>
                 <Button asChild variant="link" className="px-0 h-auto text-sm">
                   <Link to="/shopping-list">View shopping list →</Link>
