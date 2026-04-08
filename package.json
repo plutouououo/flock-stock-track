@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "seed": "node scripts/seed-owner.js"
+    "seed": "node scripts/seed-owner.js",
+    "seed:users": "node scripts/seed-users.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

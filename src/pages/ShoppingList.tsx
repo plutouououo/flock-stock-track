@@ -101,6 +101,19 @@ function useProductsWithStock() {
 export default function ShoppingList() {
   const { products, getStock, getProductStockValue, getLowStockProducts } = useProductsWithStock();
   const { data: list = [] } = useShoppingList();
+  // Tambah di dalam komponen, setelah const { data: list = [] }
+  const enrichedList = useMemo(() => {
+    return list.map((item) => {
+      const product = products.find(
+        (p) => p.id === (item.productId)  // handle kedua format
+      );
+      return {
+        ...item,
+        productName: product?.name ?? "Unknown product",
+        sku: product?.sku ?? "—",
+      };
+    });
+  }, [list, products]);
   const addItem = useAddShoppingListItem();
   const updateList = useUpdateShoppingList();
   const removeItem = useRemoveShoppingListItem();
@@ -121,14 +134,11 @@ export default function ShoppingList() {
       toast({ title: "Select a product and quantity", variant: "destructive" });
       return;
     }
-    
     addItem.mutate(
       {
-        product_id: product.id,
         productId: product.id,
-        productName: product.name,
-        sku: product.sku,
         quantity: qty,
+        isOrdered: false,
       },
       {
         onSuccess: () => {
@@ -143,7 +153,7 @@ export default function ShoppingList() {
   };
 
   const toggleChecked = (id: string, checked: boolean) => {
-    updateList.mutate([{ id, checked, is_ordered: checked }]);
+    updateList.mutate([{ id, checked, isOrdered: checked }]);
   };
 
   const handleRemove = (id: string) => {
@@ -172,7 +182,7 @@ export default function ShoppingList() {
       </div>
 
       <div className="card-elevated-md overflow-hidden">
-        {list.length === 0 ? (
+        {enrichedList.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
             <ClipboardList className="h-12 w-12 mb-4 opacity-30" />
             <p className="font-medium">Shopping list is empty</p>
@@ -197,7 +207,7 @@ export default function ShoppingList() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {list.map((item) => (
+              {enrichedList.map((item) => (
                 <TableRow key={item.id} className={item.checked ? "opacity-60" : ""}>
                   <TableCell>
                     <Checkbox

@@ -4,10 +4,13 @@ import {
   ShoppingCart,
   BarChart3,
   ClipboardList,
+  Users,
   ChevronLeft,
+  LogOut,
 } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
 import {
   Sidebar,
   SidebarContent,
@@ -20,6 +23,7 @@ import {
   SidebarFooter,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
 
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -27,12 +31,25 @@ const navItems = [
   { title: "Record Sale", url: "/sales", icon: ShoppingCart },
   { title: "Reports", url: "/reports", icon: BarChart3 },
   { title: "Shopping List", url: "/shopping-list", icon: ClipboardList },
+  { title: "Customers", url: "/customers", icon: Users },
 ];
 
 export function AppSidebar() {
   const { state, toggleSidebar } = useSidebar();
   const collapsed = state === "collapsed";
   const location = useLocation();
+  const navigate = useNavigate();
+  const { profile, logout, role } = useAuth();
+
+  const handleLogout = async () => {
+    await logout();
+    navigate("/login");
+  };
+
+  // Filter nav items based on user role
+  const visibleNavItems = role === "cashier"
+    ? navItems.filter(item => item.url === "/products" || item.url === "/sales")
+    : navItems;
 
   return (
     <Sidebar collapsible="icon">
@@ -58,7 +75,7 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.map((item) => {
+              {visibleNavItems.map((item) => {
                 const isActive =
                   item.url === "/"
                     ? location.pathname === "/"
@@ -89,7 +106,23 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="p-3">
+      <SidebarFooter className="p-3 space-y-2">
+        {/* User Profile Section */}
+        {profile && !collapsed && (
+          <div className="rounded-lg border border-sidebar-border bg-sidebar-accent/30 p-3">
+            <p className="text-xs font-semibold truncate text-sidebar-foreground">
+              {profile.full_name}
+            </p>
+            <p className="text-xs text-sidebar-foreground/60 truncate">
+              @{profile.username}
+            </p>
+            <p className="text-xs text-sidebar-foreground/50 capitalize mt-1">
+              {profile.role}
+            </p>
+          </div>
+        )}
+
+        {/* Collapse Button */}
         <button
           onClick={toggleSidebar}
           className="flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
@@ -99,6 +132,17 @@ export function AppSidebar() {
           />
           {!collapsed && <span>Collapse</span>}
         </button>
+
+        {/* Logout Button */}
+        <Button
+          onClick={handleLogout}
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start text-sidebar-foreground hover:bg-destructive/10 hover:text-destructive"
+        >
+          <LogOut className="h-4 w-4 mr-2" />
+          {!collapsed && <span>Logout</span>}
+        </Button>
       </SidebarFooter>
     </Sidebar>
   );

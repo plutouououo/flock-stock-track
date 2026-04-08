@@ -97,11 +97,11 @@ export default function Dashboard() {
     const today = format(new Date(), "yyyy-MM-dd");
     const thisMonth = format(new Date(), "yyyy-MM");
     
-    const todaySales = sales.filter((s) => s.createdAt?.startsWith(today) || s.created_at?.startsWith(today));
-    const monthSales = sales.filter((s) => s.createdAt?.startsWith(thisMonth) || s.created_at?.startsWith(thisMonth));
+    const todaySales = sales.filter((s) => s.createdAt?.startsWith(today));
+    const monthSales = sales.filter((s) => s.createdAt?.startsWith(thisMonth));
     
-    const todayRevenue = todaySales.reduce((sum, s) => sum + (s.total || s.total_amount || 0), 0);
-    const monthRevenue = monthSales.reduce((sum, s) => sum + (s.total || s.total_amount || 0), 0);
+    const todayRevenue = todaySales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
+    const monthRevenue = monthSales.reduce((sum, s) => sum + (s.totalAmount || 0), 0);
     
     const lowStockCount = getLowStockCount();
 
@@ -117,8 +117,8 @@ export default function Dashboard() {
     () =>
       [...sales]
         .sort((a, b) => {
-          const dateA = a.createdAt || a.created_at || '';
-          const dateB = b.createdAt || b.created_at || '';
+          const dateA = a.createdAt || '';
+          const dateB = b.createdAt || '';
           return dateB.localeCompare(dateA);
         })
         .slice(0, 5),
@@ -191,9 +191,9 @@ export default function Dashboard() {
           ) : (
             <ul className="space-y-2">
               {recentSales.map((s) => {
-                const saleDate = s.createdAt || s.created_at || '';
-                const customerType = s.customerType || s.customer_type || 'Unknown';
-                const total = s.total || s.total_amount || 0;
+                const saleDate = s.createdAt || '';
+                const customerType = s.customerType || 'Unknown';
+                const total = s.totalAmount|| 0;
                 
                 return (
                   <li key={s.id} className="flex justify-between text-sm">

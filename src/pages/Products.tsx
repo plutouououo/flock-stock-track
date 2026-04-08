@@ -8,6 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ProductFormDialog, type ProductFormValues } from "@/components/ProductFormDialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProducts, useAddProduct, useUpdateProduct, useDeleteProduct, queryKeys } from "@/lib/queries";
+import { useAuth } from "@/hooks/useAuth";
 import { getProductStock, addProduct as addProductStorage } from "@/lib/storage";
 import { parseProductXls, type ProductImportRow } from "@/lib/import-xls";
 import type { Product, ProductBatch } from "@/types";
@@ -22,39 +23,11 @@ function formatDate(s: string): string {
   return new Date(s).toISOString().slice(0, 10);
 }
 
-// Custom hook untuk menghitung stock dengan async
-function useProductStock(product: Product) {
-  const [stock, setStock] = useState<number>(0);
-  const [lowStock, setLowStock] = useState<boolean>(false);
-
-  useEffect(() => {
-    let mounted = true;
-
-    async function calculateStock() {
-      try {
-        const totalStock = await getProductStock(product);
-        if (mounted) {
-          setStock(totalStock);
-          setLowStock(product.threshold > 0 && totalStock <= product.threshold);
-        }
-      } catch (error) {
-        console.error('Error calculating stock:', error);
-      }
-    }
-
-    calculateStock();
-
-    return () => {
-      mounted = false;
-    };
-  }, [product]);
-
-  return { stock, lowStock };
-}
-
 export default function Products() {
   const queryClient = useQueryClient();
   const { data: products = [], isLoading } = useProducts();
+  const { role } = useAuth();
+  const isCashier = role === "cashier";
   const addProduct = useAddProduct();
   const updateProduct = useUpdateProduct();
   const deleteProduct = useDeleteProduct();
@@ -109,7 +82,7 @@ export default function Products() {
 
   const handleSubmit = (values: ProductFormValues) => {
     const now = new Date().toISOString();
-    
+
     if (editingProduct) {
       const batches: ProductBatch[] = values.batches.map((b) => ({
         id: crypto.randomUUID(),
@@ -128,8 +101,8 @@ export default function Products() {
             name: values.name,
             price: values.price,
             threshold: values.threshold,
+            category: values.category as any,
             imageUrl: values.imageUrl || undefined,
-            image_url: values.imageUrl || undefined,
             batches,
           },
         },
@@ -158,8 +131,8 @@ export default function Products() {
           sku: values.sku,
           price: values.price,
           threshold: values.threshold,
+          category: values.category as any,
           imageUrl: values.imageUrl || undefined,
-          image_url: values.imageUrl || undefined,
           batches: batches as ProductBatch[],
         },
         {
@@ -212,76 +185,77 @@ export default function Products() {
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImporting(true);
-    e.target.value = "";
-    
-    try {
-      const rows: ProductImportRow[] = await parseProductXls(file);
-      if (rows.length === 0) {
-        toast({ 
-          title: "No valid rows", 
-          description: "Check column names: name, sku, price, threshold, quantity, expiryDate", 
-          variant: "destructive" 
-        });
-        return;
-      }
+  const file = e.target.files?.[0];
+  if (!file) return;
+  setImporting(true);
+  e.target.value = "";
 
-      const existingSkus = new Set(products.map((p) => p.sku.toLowerCase()));
-      let added = 0;
-      let skipped = 0;
-      const now = new Date().toISOString();
-      
-      for (const row of rows) {
-        if (existingSkus.has(row.sku.toLowerCase())) {
-          skipped++;
-          continue;
-        }
-        
-        const batches: ProductBatch[] = [{
-          id: crypto.randomUUID(),
-          product_id: "",
-          quantity: row.quantity,
-          expiry_date: row.expiryDate,
-          created_at: now,
-          expiryDate: row.expiryDate,
-          createdAt: now,
-        }];
-
-        try {
-          await addProductStorage({
-            name: row.name,
-            sku: row.sku,
-            price: row.price,
-            threshold: row.threshold,
-            image_url: undefined,
-            imageUrl: undefined,
-            batches,
-          });
-          
-          existingSkus.add(row.sku.toLowerCase());
-          added++;
-        } catch (error) {
-          console.error('Failed to import product:', row.sku, error);
-        }
-      }
-      
-      await queryClient.invalidateQueries({ queryKey: queryKeys.products });
+  try {
+    const rows: ProductImportRow[] = await parseProductXls(file);
+    if (rows.length === 0) {
       toast({
-        title: "Import done",
-        description: `Added ${added} product(s)${skipped ? `, skipped ${skipped} duplicate SKU(s)` : ""}.`,
-      });
-    } catch (err) {
-      toast({
-        title: "Import failed",
-        description: err instanceof Error ? err.message : String(err),
+        title: "No valid rows",
+        description: "Check column names: name, sku, price, threshold, quantity, expiryDate",
         variant: "destructive",
       });
-    } finally {
-      setImporting(false);
+      return;
     }
-  };
+
+    const existingSkus = new Set(products.map((p) => p.sku.toLowerCase()));
+    let added = 0;
+    let skipped = 0;
+    const now = new Date().toISOString();
+
+    for (const row of rows) {
+      // ✅ Skip duplicate SKU
+      if (existingSkus.has(row.sku.toLowerCase())) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        // ✅ Kirim batch dengan quantity dan expiryDate dari XLS
+        await addProduct.mutateAsync({
+          name: row.name,
+          sku: row.sku,
+          price: row.price,
+          threshold: row.threshold,
+          imageUrl: undefined,
+          batches: [
+            {
+              id: crypto.randomUUID(),
+              productId: "",           // storage.ts akan override ini
+              quantity: row.quantity,
+              expiryDate: row.expiryDate,
+              costPerUnit: 0,
+              createdAt: now,
+            },
+          ],
+        });
+
+        existingSkus.add(row.sku.toLowerCase()); // ✅ Cegah duplikat dalam file yang sama
+        added++;
+      } catch (err) {
+        console.error("Failed to import product:", row.sku, err);
+        skipped++;
+      }
+    }
+
+    await queryClient.invalidateQueries({ queryKey: queryKeys.products });
+    toast({
+      title: "Import selesai",
+      description: `Berhasil menambah ${added} produk${skipped ? `, ${skipped} dilewati` : ""}.`,
+    });
+  } catch (err) {
+    toast({
+      title: "Import gagal",
+      description: err instanceof Error ? err.message : String(err),
+      variant: "destructive",
+    });
+  } finally {
+    setImporting(false);
+  }
+};
 
   return (
     <div className="space-y-6">
@@ -291,31 +265,35 @@ export default function Products() {
           <p className="page-description">Manage your poultry product catalog</p>
         </div>
         <div className="flex gap-2">
-          <label className="cursor-pointer">
-            <input
-              type="file"
-              accept=".xls,.xlsx"
-              className="hidden"
-              onChange={handleImport}
-              disabled={importing}
-            />
-            <Button variant="outline" className="gap-2" asChild disabled={importing}>
-              <span>
-                <Upload className="h-4 w-4" />
-                {importing ? "Importing..." : "Import XLS"}
-              </span>
-            </Button>
-          </label>
-          <Button
-            className="gap-2"
-            onClick={() => {
-              setEditingProduct(null);
-              setDialogOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            Add Product
-          </Button>
+          {!isCashier && (
+            <>
+              <label className="cursor-pointer">
+                <input
+                  type="file"
+                  accept=".xls,.xlsx"
+                  className="hidden"
+                  onChange={handleImport}
+                  disabled={importing}
+                />
+                <Button variant="outline" className="gap-2" asChild disabled={importing}>
+                  <span>
+                    <Upload className="h-4 w-4" />
+                    {importing ? "Importing..." : "Import XLS"}
+                  </span>
+                </Button>
+              </label>
+              <Button
+                className="gap-2"
+                onClick={() => {
+                  setEditingProduct(null);
+                  setDialogOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                Add Product
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -348,27 +326,27 @@ export default function Products() {
               <TableRow>
                 <TableHead className="w-12">Image</TableHead>
                 <TableHead>Name</TableHead>
-                <TableHead>SKU</TableHead>
+                <TableHead className="min-w-[120px]">SKU</TableHead>
                 <TableHead className="text-right">Price</TableHead>
                 <TableHead className="text-right">Stock</TableHead>
                 <TableHead className="text-right">Threshold</TableHead>
                 <TableHead className="text-center">Batches / Expiry</TableHead>
-                <TableHead className="w-24">Actions</TableHead>
+                {!isCashier && <TableHead className="w-24">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {filtered.map((p) => {
                 const stockInfo = productStockMap.get(p.id) || { stock: 0, lowStock: false };
                 const sortedBatches = [...(p.batches || [])].sort(
-                  (a, b) => new Date(a.expiry_date || a.expiryDate || '').getTime() - 
-                           new Date(b.expiry_date || b.expiryDate || '').getTime()
+                  (a, b) => new Date(a.expiryDate || '').getTime() - 
+                           new Date(b.expiryDate || '').getTime()
                 );
 
                 return (
                   <TableRow key={p.id}>
                     <TableCell>
                       <Avatar className="h-10 w-10 rounded-md">
-                        <AvatarImage src={p.imageUrl || p.image_url} alt={p.name} className="object-cover" />
+                        <AvatarImage src={p.imageUrl} alt={p.name} className="object-cover" />
                         <AvatarFallback className="rounded-md bg-muted text-xs">
                           {p.name.slice(0, 2).toUpperCase()}
                         </AvatarFallback>
@@ -379,7 +357,7 @@ export default function Products() {
                         {p.name}
                       </span>
                     </TableCell>
-                    <TableCell className="font-mono text-sm">{p.sku}</TableCell>
+                    <TableCell className="font-mono text-sm min-w-[120px]">{p.sku}</TableCell>
                     <TableCell className="text-right">{formatRupiah(p.price)}</TableCell>
                     <TableCell className="text-right">
                       <span className={cn(stockInfo.lowStock && "text-warning font-medium")}>
@@ -397,7 +375,7 @@ export default function Products() {
                         <>
                           {sortedBatches.slice(0, 2).map((b) => (
                             <span key={b.id} className="block">
-                              {b.quantity} → {formatDate(b.expiry_date || b.expiryDate || '')}
+                              {b.quantity} → {formatDate(b.expiryDate || '')}
                             </span>
                           ))}
                           {sortedBatches.length > 2 && (
@@ -407,20 +385,27 @@ export default function Products() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => handleEdit(p)} title="Edit">
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDelete(p)}
-                          title="Delete"
-                          className="text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+                      {!isCashier && (
+                        <div className="flex gap-1">
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            onClick={() => handleEdit(p)} 
+                            title="Edit"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDelete(p)}
+                            title="Delete"
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 );

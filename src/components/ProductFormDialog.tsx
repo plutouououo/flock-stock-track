@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -19,7 +19,23 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { Product } from "@/types";
+
+const DEFAULT_CATEGORIES = [
+  "Ayam Potong",
+  "Ayam Kampung",
+  "Bebek",
+  "Jeroan",
+  "Olahan",
+  "Lainnya",
+];
 
 const batchSchema = z.object({
   quantity: z.coerce.number().min(1, "Min 1"),
@@ -31,6 +47,7 @@ const formSchema = z.object({
   sku: z.string().min(1, "SKU required"),
   price: z.coerce.number().min(0, "Price must be ≥ 0"),
   threshold: z.coerce.number().min(0, "Threshold must be ≥ 0"),
+  category: z.string().min(1, "Category required"),
   imageUrl: z.string().url().optional().or(z.literal("")),
   batches: z.array(batchSchema).min(1, "Add at least one batch"),
 });
@@ -58,6 +75,9 @@ export function ProductFormDialog({
   isSubmitting = false,
 }: ProductFormDialogProps) {
   const isEdit = !!product;
+  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [newCategoryInput, setNewCategoryInput] = useState("");
+  const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
   const form = useForm<ProductFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -65,19 +85,25 @@ export function ProductFormDialog({
       sku: "",
       price: 0,
       threshold: 0,
+      category: "Lainnya",
       imageUrl: "",
       batches: [defaultBatch()],
     },
   });
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setShowNewCategoryInput(false);
+      setNewCategoryInput("");
+      return;
+    }
     if (product) {
       form.reset({
         name: product.name,
         sku: product.sku,
         price: product.price,
         threshold: product.threshold,
+        category: product.category || "Lainnya",
         imageUrl: product.imageUrl ?? "",
         batches:
           product.batches.length > 0
@@ -93,6 +119,7 @@ export function ProductFormDialog({
         sku: "",
         price: 0,
         threshold: 0,
+        category: "Lainnya",
         imageUrl: "",
         batches: [defaultBatch()],
       });
@@ -100,6 +127,14 @@ export function ProductFormDialog({
   }, [open, product, form]);
 
   const batches = form.watch("batches");
+  const categoryValue = form.watch("category");
+
+  // Show input when "__new__" is selected
+  useEffect(() => {
+    if (categoryValue === "__new__") {
+      setShowNewCategoryInput(true);
+    }
+  }, [categoryValue]);
 
   const addBatch = () => {
     form.setValue("batches", [...batches, defaultBatch()]);
@@ -145,6 +180,69 @@ export function ProductFormDialog({
                   <FormLabel>SKU</FormLabel>
                   <FormControl>
                     <Input placeholder="e.g. CHK-BREAST-001" {...field} disabled={isEdit} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="category"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Category</FormLabel>
+                  <FormControl>
+                    <div className="space-y-2">
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categories.map((cat) => (
+                            <SelectItem key={cat} value={cat}>
+                              {cat}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value="__new__">+ Add new category</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {showNewCategoryInput && (
+                        <div className="flex gap-2">
+                          <Input
+                            placeholder="New category name"
+                            value={newCategoryInput}
+                            onChange={(e) => setNewCategoryInput(e.target.value)}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => {
+                              if (newCategoryInput.trim()) {
+                                const newCat = newCategoryInput.trim();
+                                setCategories([...categories, newCat]);
+                                field.onChange(newCat);
+                                setNewCategoryInput("");
+                                setShowNewCategoryInput(false);
+                              }
+                            }}
+                          >
+                            Add
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setShowNewCategoryInput(false);
+                              setNewCategoryInput("");
+                              field.onChange(categories[0]);
+                            }}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   </FormControl>
                   <FormMessage />
                 </FormItem>

@@ -1,3 +1,5 @@
+// ada yang salah ni di seed-owner.js
+
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 
@@ -12,7 +14,7 @@ async function seedOwner() {
   // Sign up the owner
   const { data: authData, error: authError } = await supabaseAdmin.auth.signUp({
     email: 'owner@aj33.com', // Placeholder email
-    password: 'password123', // Placeholder password
+    password: 'rahasia33a', // Placeholder password
   });
 
   if (authError) {

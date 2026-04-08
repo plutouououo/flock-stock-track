@@ -4,7 +4,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { Product, Sale, ShoppingListItem, Customer, Expense, ProductBatch } from "@/types";
+import type { Product, Sale, ShoppingListItem, Customer, Expense, ProductBatch, SaleItem } from "@/types";
 import * as storage from "./storage";
 
 export const queryKeys = {
@@ -77,7 +77,7 @@ export function useSalesWithItems() {
         
         return sales.map(sale => ({
           ...sale,
-          items: saleItems.filter(item => item.sale_id === sale.id)
+          items: saleItems.filter(item => (item.saleId) === sale.id)
         }));
       }
     },
@@ -205,31 +205,98 @@ export function useAddProductBatch() {
 
 export function useRecordSale() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: async (sale: RecordSaleParams) => {
-      // Deduct stock for each item first; if any fails, throw
+      const deducted: { product_id: string; quantity: number }[] = [];
+
       for (const item of sale.items) {
-        const ok = await storage.deductStock(item.product_id, item.quantity);
+        const ok = await storage.deductStock(item.productId, item.quantity);
         if (!ok) {
-          const product = await storage.getProductById(item.product_id);
+          // Rollback everything deducted so far before throwing
+          for (const d of deducted) {
+            await storage.addProductBatch({
+              productId: d.product_id,
+              quantity: d.quantity,
+              expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+              costPerUnit: 0,
+            });
+          }
+          const product = await storage.getProductById(item.productId);
           throw new Error(
-            `Insufficient stock for product ${product?.name || item.product_id}`
+            `Insufficient stock for product ${product?.name || item.productId}`
           );
         }
+        deducted.push({ product_id: item.productId, quantity: item.quantity });
       }
-      return await storage.addSale(sale);
+
+      try {
+        return await storage.addSale(sale);
+      } catch (err) {
+        // Rollback all deductions if the sale itself fails
+        for (const d of deducted) {
+          await storage.addProductBatch({
+            productId: d.product_id,
+            quantity: d.quantity,
+            expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+            costPerUnit: 0,
+          });
+        }
+        throw err;
+      }
     },
-    onSuccess: (newSale) => {
-      // Invalidate multiple queries that are affected by a sale
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.products });
       queryClient.invalidateQueries({ queryKey: queryKeys.productBatches });
       queryClient.invalidateQueries({ queryKey: queryKeys.sales });
       queryClient.invalidateQueries({ queryKey: queryKeys.salesWithItems });
       queryClient.invalidateQueries({ queryKey: queryKeys.saleItems });
     },
-    onError: (error) => {
-      console.error('Failed to record sale:', error);
+  });
+}
+
+export function useDeleteSale() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (saleId: string) => {
+      return await storage.deleteSale(saleId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sales });
+      queryClient.invalidateQueries({ queryKey: queryKeys.salesWithItems });
+      queryClient.invalidateQueries({ queryKey: queryKeys.saleItems });
+      queryClient.invalidateQueries({ queryKey: queryKeys.productBatches });
+      queryClient.invalidateQueries({ queryKey: queryKeys.products });
+    },
+  });
+}
+
+export function useUpdateSale() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: Partial<Sale> }) => {
+      return await storage.updateSale(id, updates);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sales });
+      queryClient.invalidateQueries({ queryKey: queryKeys.salesWithItems });
+    },
+  });
+}
+
+export function useUpdateSaleItems() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ saleId, items }: { saleId: string; items: SaleItem[] }) => {
+      return await storage.updateSaleItems(saleId, items);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sales });
+      queryClient.invalidateQueries({ queryKey: queryKeys.salesWithItems });
+      queryClient.invalidateQueries({ queryKey: queryKeys.saleItems });
     },
   });
 }
@@ -340,7 +407,7 @@ export function useOptimisticShoppingList() {
   
   const toggleItem = useMutation({
     mutationFn: async ({ id, checked }: { id: string; checked: boolean }) => {
-      await storage.updateShoppingList([{ id, checked, is_ordered: checked }]);
+      await storage.updateShoppingList([{ id, checked, isOrdered: checked }]);
       return { id, checked };
     },
     onMutate: async ({ id, checked }) => {

@@ -3,8 +3,9 @@
  * Supports localStorage fallback and Supabase sync.
  */
 
-import type { AppData, Product, Sale, ShoppingListItem, ProductBatch, SaleItem, Customer, Expense, Setting } from "@/types";
+import type { AppData, Product, Sale, ShoppingListItem, ProductBatch, SaleItem, Customer, Expense, Setting, SaleDB, SaleItemDB, ExpenseDB, ProductBatchDB, ProductDB, ShoppingListItemDB, CustomerDB, SettingDB } from "@/types";
 import { supabase } from "./supabase";
+import { map } from "zod";
 
 const STORAGE_KEY = "poultrymart_data";
 
@@ -57,18 +58,114 @@ function toCamelCase(str: string): string {
   return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
+// Ga dipake soalnya ini transformer generic 
 // Transform database record to frontend type (snake_case to camelCase)
-function transformDbToFrontend<T>(record: any): T {
-  if (!record) return record;
+// function transformDbToFrontend<T>(record: any): T {
+//   if (!record) return record;
   
-  const transformed: any = {};
-  for (const [key, value] of Object.entries(record)) {
-    const camelKey = toCamelCase(key);
-    transformed[camelKey] = value;
-  }
-  return transformed as T;
+//   const transformed: any = {};
+//   for (const [key, value] of Object.entries(record)) {
+//     const camelKey = toCamelCase(key);
+//     transformed[camelKey] = value;
+//   }
+//   return transformed as T;
+// }
+
+function mapSale(sale: SaleDB): Sale {
+  return {
+    id: sale.id,
+    cashierId: sale.cashier_id, 
+    customerId: sale.customer_id,
+    customerType: sale.customer_type,
+    paymentMethod: sale.payment_method,
+    paymentNominal: sale.payment_nominal,
+    totalAmount: sale.total_amount,
+    receiptUrl: sale.receipt_url,
+    createdAt: sale.created_at,
+    items: [] // items will be populated separately
+  };
 }
 
+function mapSaleItem(saleItem: SaleItemDB): SaleItem {
+  return {
+    id: saleItem.id,
+    saleId: saleItem.sale_id,
+    productId: saleItem.product_id,
+    quantity: saleItem.quantity,
+    unitPrice: saleItem.unit_price,
+    totalPrice: saleItem.total_price
+  };
+}
+
+function mapExpense(expense: ExpenseDB): Expense {
+  return {
+    id: expense.id,
+    type: expense.type,
+    date: expense.date,
+    description: expense.description,
+    amount: expense.amount,
+    createdAt: expense.created_at
+  };
+}
+
+function mapProductBatch(batch: ProductBatchDB): ProductBatch {
+  return {
+    id: batch.id,
+    productId: batch.product_id,
+    quantity: batch.quantity,
+    expiryDate: batch.expiry_date,
+    costPerUnit: batch.cost_per_unit,
+    createdAt: batch.created_at
+  };
+}
+
+function mapProduct(product: ProductDB): Product {
+  return {
+    id: product.id,
+    name: product.name,
+    sku: product.sku,
+    category: product.category,
+    price: product.price,
+    threshold: product.threshold,
+    imageUrl: product.image_url,
+    createdAt: product.created_at,
+    updatedAt: product.updated_at
+  };
+}
+
+function mapShoppingListItem(item: ShoppingListItemDB): ShoppingListItem {
+  return {
+    id: item.id,
+    productId: item.product_id,
+    quantity: item.quantity,
+    isOrdered: item.is_ordered,
+    checked: item.checked,
+    createdAt: item.created_at,
+    updatedAt: item.updated_at
+  };
+}
+
+function mapCustomer(customer: CustomerDB): Customer {
+  return {
+    id: customer.id,
+    name: customer.name,
+    phone: customer.phone,
+    address: customer.address,
+    createdAt: customer.created_at,
+    updatedAt: customer.updated_at
+  };
+}
+
+function mapSetting(setting: SettingDB): Setting {
+  return {
+    id: setting.id,
+    key: setting.key,
+    value: setting.value,
+    createdAt: setting.created_at,
+    updatedAt: setting.updated_at
+  };
+}
+  
 // Helper to get current user
 async function getCurrentUserId(): Promise<string> {
   const { data: { user } } = await supabase.auth.getUser();
@@ -88,19 +185,13 @@ export async function getSalesWithItems(): Promise<Sale[]> {
 
     if (error) throw error;
 
-    // Map the result to flatten sale_items into items and transform to camelCase
     const mapped = data?.map(sale => {
-      const transformedSale = transformDbToFrontend<Omit<Sale, 'items'>>(sale);
-      const items = (sale.sale_items || []).map((item: any) => 
-        transformDbToFrontend<SaleItem>(item)
-      );
+      const items = (sale.sale_items || []).map(mapSaleItem);
       return {
-        ...transformedSale,
+        ...mapSale(sale),
         items,
-        customerType: transformedSale.customerType as Sale['customerType'],
-        paymentMethod: transformedSale.paymentMethod as Sale['paymentMethod'],
       };
-    }) || [];
+    });
 
     return mapped;
   } catch (err) {
@@ -110,7 +201,7 @@ export async function getSalesWithItems(): Promise<Sale[]> {
     const saleItems = load().saleItems;
     return sales.map(sale => ({
       ...sale,
-      items: saleItems.filter(item => item.sale_id === sale.id)
+      items: saleItems.filter(item => item.saleId === sale.id)
     }));
   }
 }
@@ -130,9 +221,9 @@ export async function migrateToSupabase(): Promise<void> {
         sku: product.sku,
         price: product.price,
         threshold: product.threshold,
-        image_url: product.image_url || product.imageUrl,
-        created_at: product.created_at || product.createdAt,
-        updated_at: product.updated_at || product.updatedAt,
+        image_url: product.imageUrl,
+        created_at: product.createdAt,
+        updated_at: product.updatedAt,
       })
       .select()
       .single();
@@ -147,9 +238,9 @@ export async function migrateToSupabase(): Promise<void> {
             id: batch.id,
             product_id: prodData.id,
             quantity: batch.quantity,
-            expiry_date: batch.expiry_date || batch.expiryDate,
-            cost_per_unit: batch.cost_per_unit || batch.costPerUnit,
-            created_at: batch.created_at || batch.createdAt,
+            expiry_date: batch.expiryDate,
+            cost_per_unit: batch.costPerUnit,
+            created_at: batch.createdAt,
           });
         if (batchError) throw batchError;
       }
@@ -162,11 +253,11 @@ export async function migrateToSupabase(): Promise<void> {
       .from('product_batches')
       .upsert({
         id: batch.id,
-        product_id: batch.product_id,
+        product_id: batch.productId,
         quantity: batch.quantity,
-        expiry_date: batch.expiry_date || batch.expiryDate,
-        cost_per_unit: batch.cost_per_unit || batch.costPerUnit,
-        created_at: batch.created_at || batch.createdAt,
+        expiry_date: batch.expiryDate,
+        cost_per_unit: batch.costPerUnit,
+        created_at: batch.createdAt,
       });
     if (batchError) throw batchError;
   }
@@ -178,13 +269,13 @@ export async function migrateToSupabase(): Promise<void> {
       .upsert({
         id: sale.id,
         cashier_id: userId,
-        customer_id: sale.customer_id || sale.customerId,
-        customer_type: sale.customer_type || sale.customerType,
-        payment_method: sale.payment_method || sale.paymentMethod,
-        payment_nominal: sale.payment_nominal || sale.paymentNominal,
-        total_amount: sale.total_amount || sale.total,
-        receipt_url: sale.receipt_url || sale.receiptUrl,
-        created_at: sale.created_at || sale.createdAt,
+        customer_id: sale.customerId,
+        customer_type: sale.customerType,
+        payment_method: sale.paymentMethod,
+        payment_nominal: sale.paymentNominal,
+        total_amount: sale.totalAmount,
+        receipt_url: sale.receiptUrl,
+        created_at: sale.createdAt,
       })
       .select()
       .single();
@@ -197,10 +288,10 @@ export async function migrateToSupabase(): Promise<void> {
         .upsert({
           id: item.id,
           sale_id: saleData.id,
-          product_id: item.product_id || item.productId,
+          product_id: item.productId,
           quantity: item.quantity,
-          unit_price: item.unit_price || item.unitPrice,
-          total_price: item.total_price || item.totalPrice,
+          unit_price: item.unitPrice,
+          total_price: item.totalPrice,
         });
       if (itemError) throw itemError;
     }
@@ -215,8 +306,8 @@ export async function migrateToSupabase(): Promise<void> {
         name: customer.name,
         phone: customer.phone,
         address: customer.address,
-        created_at: customer.created_at,
-        updated_at: customer.updated_at, 
+        created_at: customer.createdAt,
+        updated_at: customer.updatedAt, 
       });
     if (error) throw error;
   }
@@ -231,7 +322,7 @@ export async function migrateToSupabase(): Promise<void> {
         date: expense.date,
         description: expense.description,
         amount: expense.amount,
-        created_at: expense.created_at,
+        created_at: expense.createdAt,
       });
     if (error) throw error;
   }
@@ -242,12 +333,12 @@ export async function migrateToSupabase(): Promise<void> {
       .from('shopping_list_items')
       .upsert({
         id: item.id,
-        product_id: item.product_id || item.productId,
+        product_id: item.productId,
         quantity: item.quantity,
-        is_ordered: item.is_ordered || item.checked || false,
-        checked: item.checked || item.is_ordered || false,
-        created_at: item.created_at || item.createdAt,
-        updated_at: item.updated_at || item.updatedAt,
+        is_ordered: item.isOrdered || item.checked || false,
+        checked: item.checked || item.isOrdered || false,
+        created_at: item.createdAt,
+        updated_at: item.updatedAt,
       });
     if (error) throw error;
   }
@@ -260,8 +351,8 @@ export async function migrateToSupabase(): Promise<void> {
         id: setting.id,
         key: setting.key,
         value: setting.value,
-        created_at: setting.created_at,
-        updated_at: setting.updated_at,
+        created_at: setting.createdAt,
+        updated_at: setting.updatedAt,
       });
     if (error) throw error;
   }
@@ -281,12 +372,9 @@ export async function getProducts(): Promise<Product[]> {
     if (error) throw error;
 
     return (data || []).map(item => {
-      const product = transformDbToFrontend<Product>(item);
       return {
-        ...product,
-        batches: (item.product_batches || []).map((batch: any) => 
-          transformDbToFrontend<ProductBatch>(batch)
-        ),
+        ...mapProduct(item),
+        batches: (item.product_batches || []).map(mapProductBatch),
       };
     });
   } catch (err) {
@@ -302,7 +390,7 @@ export async function getProductBatches(): Promise<ProductBatch[]> {
       .select('*');
 
     if (error) throw error;
-    return (data || []).map(item => transformDbToFrontend<ProductBatch>(item));
+    return (data || []).map(mapProductBatch);
   } catch (err) {
     console.warn('Failed to fetch product batches from Supabase, falling back to localStorage:', err);
     return load().productBatches;
@@ -325,7 +413,7 @@ export async function getSaleItems(): Promise<SaleItem[]> {
       .select('*');
 
     if (error) throw error;
-    return (data || []).map(item => transformDbToFrontend<SaleItem>(item));
+    return (data || []).map(mapSaleItem);
   } catch (err) {
     console.warn('Failed to fetch sale items from Supabase, falling back to localStorage:', err);
     return load().saleItems;
@@ -339,7 +427,7 @@ export async function getCustomers(): Promise<Customer[]> {
       .select('*');
 
     if (error) throw error;
-    return (data || []).map(item => transformDbToFrontend<Customer>(item));
+    return (data || []).map(mapCustomer);
   } catch (err) {
     console.warn('Failed to fetch customers from Supabase, falling back to localStorage:', err);
     return load().customers;
@@ -353,7 +441,7 @@ export async function getExpenses(): Promise<Expense[]> {
       .select('*');
 
     if (error) throw error;
-    return (data || []).map(item => transformDbToFrontend<Expense>(item));
+    return (data || []).map(mapExpense);
   } catch (err) {
     console.warn('Failed to fetch expenses from Supabase, falling back to localStorage:', err);
     return load().expenses;
@@ -367,7 +455,7 @@ export async function getShoppingList(): Promise<ShoppingListItem[]> {
       .select('*');
 
     if (error) throw error;
-    return (data || []).map(item => transformDbToFrontend<ShoppingListItem>(item));
+    return (data || []).map(mapShoppingListItem);
   } catch (err) {
     console.warn('Failed to fetch shopping list from Supabase, falling back to localStorage:', err);
     return load().shoppingList;
@@ -380,7 +468,7 @@ export async function getSettings(): Promise<Setting[]> {
       .from('settings')
       .select('*');
     if (error) throw error;
-    return (data || []).map(item => transformDbToFrontend<Setting>(item));
+    return (data || []).map(mapSetting);
   } catch (err) {
     console.warn('Failed to fetch settings from Supabase, falling back to localStorage:', err);
     return load().settings;
@@ -396,14 +484,9 @@ export async function getProductById(id: string): Promise<Product | undefined> {
 export async function getProductStock(product: string | Product): Promise<number> {
   const productId = typeof product === "string" ? product : product.id;
   const batches = await getProductBatches();
-  
-  if (!Array.isArray(batches)) {
-    console.warn('Product batches data is not an array. Check data integrity.', batches);
-    return 0;
-  }
-  
+
   return batches
-    .filter((b) => b.product_id === productId)
+    .filter((b) => (b.productId) === productId) // ✅ handle kedua format
     .reduce((sum, b) => sum + (b.quantity || 0), 0);
 }
 
@@ -411,7 +494,7 @@ export async function getProductStock(product: string | Product): Promise<number
 
 export async function addProduct(product: Omit<Product, "id" | "created_at" | "updated_at">): Promise<Product> {
   try {
-    const userId = await getCurrentUserId();
+    // const userId = await getCurrentUserId();
     const now = new Date().toISOString();
     const newProduct = {
       ...product,
@@ -427,9 +510,10 @@ export async function addProduct(product: Omit<Product, "id" | "created_at" | "u
         id: newProduct.id,
         name: newProduct.name,
         sku: newProduct.sku,
+        category: newProduct.category ?? 'Lainnya', // ← tambah
         price: newProduct.price,
         threshold: newProduct.threshold,
-        image_url: newProduct.image_url || newProduct.imageUrl,
+        image_url: newProduct.imageUrl,
         created_at: now,
         updated_at: now,
       })
@@ -444,9 +528,9 @@ export async function addProduct(product: Omit<Product, "id" | "created_at" | "u
         id: batch.id || crypto.randomUUID(),
         product_id: data.id,
         quantity: batch.quantity,
-        expiry_date: batch.expiry_date || batch.expiryDate,
-        cost_per_unit: batch.cost_per_unit || batch.costPerUnit,
-        created_at: batch.created_at || batch.createdAt || now,
+        expiry_date: batch.expiryDate,
+        cost_per_unit: batch.costPerUnit,
+        created_at: batch.createdAt || now,
       }));
 
       const { error: batchError } = await supabase
@@ -470,8 +554,8 @@ export async function addProduct(product: Omit<Product, "id" | "created_at" | "u
     const newProduct: Product = {
       ...product,
       id: crypto.randomUUID(),
-      created_at: now,
-      updated_at: now,
+      createdAt: now,
+      updatedAt: now,
     };
     products.push(newProduct);
     save({ ...load(), products });
@@ -488,9 +572,10 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
       .from('products')
       .update({
         name: updates.name,
+        category: updates.category,              // ← tambah
         price: updates.price,
         threshold: updates.threshold,
-        image_url: updates.image_url || updates.imageUrl,
+        image_url: updates.imageUrl,
         updated_at: now,
       })
       .eq('id', id)
@@ -512,9 +597,9 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
         id: batch.id || crypto.randomUUID(),
         product_id: id,
         quantity: batch.quantity,
-        expiry_date: batch.expiry_date || batch.expiryDate,
-        cost_per_unit: batch.cost_per_unit || batch.costPerUnit,
-        created_at: batch.created_at || batch.createdAt || now,
+        expiry_date: batch.expiryDate,
+        cost_per_unit: batch.costPerUnit,
+        created_at: batch.createdAt || now,
       }));
 
       const { error: batchError } = await supabase
@@ -531,13 +616,13 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
       products[idx] = {
         ...products[idx],
         ...updates,
-        updated_at: now,
+        updatedAt: now,
       };
       save({ ...load(), products });
       return products[idx];
     }
 
-    return transformDbToFrontend<Product>(data);
+    return data;
   } catch (error) {
     console.error('Error updating product in Supabase, falling back to localStorage:', error);
     // Fallback to localStorage
@@ -548,7 +633,7 @@ export async function updateProduct(id: string, updates: Partial<Product>): Prom
     products[idx] = {
       ...products[idx],
       ...updates,
-      updated_at: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     save({ ...load(), products });
     return products[idx];
@@ -568,8 +653,8 @@ export async function deleteProduct(id: string): Promise<boolean> {
     // Update localStorage
     const data = load();
     data.products = data.products.filter((p) => p.id !== id);
-    data.productBatches = data.productBatches.filter((b) => b.product_id !== id);
-    data.shoppingList = data.shoppingList.filter((item) => item.product_id !== id);
+    data.productBatches = data.productBatches.filter((b) => b.productId !== id);
+    data.shoppingList = data.shoppingList.filter((item) => item.productId !== id);
     save(data);
 
     return true;
@@ -581,8 +666,8 @@ export async function deleteProduct(id: string): Promise<boolean> {
     data.products = data.products.filter((p) => p.id !== id);
     if (data.products.length === originalLength) return false;
     
-    data.productBatches = data.productBatches.filter((b) => b.product_id !== id);
-    data.shoppingList = data.shoppingList.filter((item) => item.product_id !== id);
+    data.productBatches = data.productBatches.filter((b) => b.productId !== id);
+    data.shoppingList = data.shoppingList.filter((item) => item.productId !== id);
     save(data);
     return true;
   }
@@ -602,10 +687,10 @@ export async function addProductBatch(batch: Omit<ProductBatch, "id" | "created_
       .from('product_batches')
       .insert({
         id: newBatch.id,
-        product_id: newBatch.product_id,
+        product_id: newBatch.productId,
         quantity: newBatch.quantity,
-        expiry_date: newBatch.expiry_date || newBatch.expiryDate,
-        cost_per_unit: newBatch.cost_per_unit || newBatch.costPerUnit,
+        expiry_date: newBatch.expiryDate,
+        cost_per_unit: newBatch.costPerUnit,
         created_at: now,
       });
 
@@ -625,7 +710,7 @@ export async function addProductBatch(batch: Omit<ProductBatch, "id" | "created_
     const newBatch: ProductBatch = {
       ...batch,
       id: crypto.randomUUID(),
-      created_at: now,
+      createdAt: now,
     };
     batches.push(newBatch);
     save({ ...load(), productBatches: batches });
@@ -649,12 +734,12 @@ export async function addSale(sale: Omit<Sale, "id" | "created_at">): Promise<Sa
       .insert({
         id: newSale.id,
         cashier_id: userId,
-        customer_id: newSale.customer_id || newSale.customerId,
-        customer_type: newSale.customer_type || newSale.customerType,
-        payment_method: newSale.payment_method || newSale.paymentMethod,
-        payment_nominal: newSale.payment_nominal || newSale.paymentNominal,
-        total_amount: newSale.total_amount || newSale.total,
-        receipt_url: newSale.receipt_url || newSale.receiptUrl,
+        customer_id: newSale.customerId,
+        customer_type: newSale.customerType,
+        payment_method: newSale.paymentMethod,
+        payment_nominal: newSale.paymentNominal,
+        total_amount: newSale.totalAmount,
+        receipt_url: newSale.receiptUrl,
         created_at: now,
       })
       .select()
@@ -666,10 +751,10 @@ export async function addSale(sale: Omit<Sale, "id" | "created_at">): Promise<Sa
     const saleItems = newSale.items.map(item => ({
       id: item.id || crypto.randomUUID(),
       sale_id: saleData.id,
-      product_id: item.product_id || item.productId,
+      product_id: item.productId,
       quantity: item.quantity,
-      unit_price: item.unit_price || item.unitPrice,
-      total_price: item.total_price || item.totalPrice,
+      unit_price: item.unitPrice,
+      total_price: item.totalPrice,
     }));
 
     const { error: itemsError } = await supabase
@@ -693,7 +778,7 @@ export async function addSale(sale: Omit<Sale, "id" | "created_at">): Promise<Sa
     const newSale: Sale = {
       ...sale,
       id: crypto.randomUUID(),
-      created_at: now,
+      createdAt: now,
     };
     data.sales.push(newSale);
     data.saleItems.push(...sale.items.map(item => ({
@@ -708,82 +793,23 @@ export async function addSale(sale: Omit<Sale, "id" | "created_at">): Promise<Sa
 
 export async function deductStock(productId: string, quantity: number): Promise<boolean> {
   try {
-    const batches = (await getProductBatches()).filter(b => b.product_id === productId);
-    const total = batches.reduce((sum, b) => sum + b.quantity, 0);
-    if (total < quantity) return false;
-    
-    const sortedBatches = [...batches].sort(
-      (a, b) => new Date(a.expiry_date || a.expiryDate || '').getTime() - 
-               new Date(b.expiry_date || b.expiryDate || '').getTime()
+    // ✅ handle kedua format
+    const batches = (await getProductBatches()).filter(
+      (b) => (b.productId) === productId
     );
     
-    let remaining = quantity;
-    const updatedBatches: ProductBatch[] = [];
-    
-    for (const batch of sortedBatches) {
-      if (remaining <= 0) {
-        updatedBatches.push(batch);
-        continue;
-      }
-      const take = Math.min(batch.quantity, remaining);
-      remaining -= take;
-      const left = batch.quantity - take;
-      if (left > 0) {
-        updatedBatches.push({ 
-          ...batch, 
-          quantity: left 
-        });
-      }
-    }
-    
-    if (remaining > 0) return false;
-    
-    // Update in Supabase
-    for (const batch of updatedBatches) {
-      const { error } = await supabase
-        .from('product_batches')
-        .update({ quantity: batch.quantity })
-        .eq('id', batch.id);
-      
-      if (error) throw error;
-    }
-    
-    // Delete batches with zero quantity
-    const batchesToDelete = batches
-      .filter(b => !updatedBatches.some(ub => ub.id === b.id))
-      .map(b => b.id);
-    
-    if (batchesToDelete.length > 0) {
-      await supabase
-        .from('product_batches')
-        .delete()
-        .in('id', batchesToDelete);
-    }
-    
-    // Update localStorage
-    const allBatches = (await getProductBatches())
-      .filter(b => b.product_id !== productId)
-      .concat(updatedBatches);
-    
-    const data = load();
-    data.productBatches = allBatches;
-    save(data);
-    
-    return true;
-  } catch (error) {
-    console.error('Error deducting stock in Supabase, falling back to localStorage:', error);
-    // Fallback to localStorage
-    const batches = getProductBatchesSync().filter(b => b.product_id === productId);
     const total = batches.reduce((sum, b) => sum + b.quantity, 0);
     if (total < quantity) return false;
-    
+
     const sortedBatches = [...batches].sort(
-      (a, b) => new Date(a.expiry_date).getTime() - new Date(b.expiry_date).getTime()
+      (a, b) =>
+        new Date(a.expiryDate || "").getTime() -
+        new Date(b.expiryDate || "").getTime()
     );
-    
+
     let remaining = quantity;
     const updatedBatches: ProductBatch[] = [];
-    
+
     for (const batch of sortedBatches) {
       if (remaining <= 0) {
         updatedBatches.push(batch);
@@ -796,13 +822,78 @@ export async function deductStock(productId: string, quantity: number): Promise<
         updatedBatches.push({ ...batch, quantity: left });
       }
     }
-    
+
     if (remaining > 0) return false;
+
+    // Update Supabase
+    for (const batch of updatedBatches) {
+      const { error } = await supabase
+        .from("product_batches")
+        .update({ quantity: batch.quantity })
+        .eq("id", batch.id);
+      if (error) throw error;
+    }
+
+    // Delete zero-quantity batches
+    const batchesToDelete = batches
+      .filter((b) => !updatedBatches.some((ub) => ub.id === b.id))
+      .map((b) => b.id);
+
+    if (batchesToDelete.length > 0) {
+      await supabase
+        .from("product_batches")
+        .delete()
+        .in("id", batchesToDelete);
+    }
+
+    // ✅ Build dari data yang sudah ada, jangan re-fetch
+    const allBatches = (await getProductBatches()).filter(
+      (b) => (b.productId) !== productId
+    ).concat(updatedBatches);
+
+    const data = load();
+    data.productBatches = allBatches;
+    save(data);
+
+    return true;
+  } catch (error) {
+    console.error("Error deducting stock in Supabase, falling back to localStorage:", error);
     
+    // Fallback localStorage — ✅ fix field name di sini juga
+    const batches = getProductBatchesSync().filter(
+      (b) => (b.productId) === productId
+    );
+    const total = batches.reduce((sum, b) => sum + b.quantity, 0);
+    if (total < quantity) return false;
+
+    const sortedBatches = [...batches].sort(
+      (a, b) =>
+        new Date(a.expiryDate || "").getTime() -
+        new Date(b.expiryDate || "").getTime()
+    );
+
+    let remaining = quantity;
+    const updatedBatches: ProductBatch[] = [];
+
+    for (const batch of sortedBatches) {
+      if (remaining <= 0) {
+        updatedBatches.push(batch);
+        continue;
+      }
+      const take = Math.min(batch.quantity, remaining);
+      remaining -= take;
+      const left = batch.quantity - take;
+      if (left > 0) {
+        updatedBatches.push({ ...batch, quantity: left });
+      }
+    }
+
+    if (remaining > 0) return false;
+
     const allBatches = getProductBatchesSync()
-      .filter(b => b.product_id !== productId)
+      .filter((b) => (b.productId) !== productId)
       .concat(updatedBatches);
-    
+
     const data = load();
     data.productBatches = allBatches;
     save(data);
@@ -815,14 +906,14 @@ function getProductBatchesSync(): ProductBatch[] {
   return load().productBatches;
 }
 
-export async function addCustomer(customer: Omit<Customer, "id" | "created_at" | "updated_at">): Promise<Customer> {
+export async function addCustomer(customer: Omit<Customer, "id" | "createdAt" | "updatedAt">): Promise<Customer> {
   try {
     const now = new Date().toISOString();
-    const newCustomer = {
+    const newCustomer: Customer = {
       ...customer,
       id: crypto.randomUUID(),
-      created_at: now,
-      updated_at: now,
+      createdAt: now,
+      updatedAt: now,
     };
 
     const { error } = await supabase
@@ -850,8 +941,8 @@ export async function addCustomer(customer: Omit<Customer, "id" | "created_at" |
     const newCustomer: Customer = {
       ...customer,
       id: crypto.randomUUID(),
-      created_at: now,
-      updated_at: now,
+      createdAt: now,
+      updatedAt: now,
     };
     customers.push(newCustomer);
     save({ ...load(), customers });
@@ -893,7 +984,7 @@ export async function addExpense(expense: Omit<Expense, "id" | "created_at">): P
     const newExpense: Expense = {
       ...expense,
       id: crypto.randomUUID(),
-      created_at: now,
+      createdAt: now,
     };
     expenses.push(newExpense);
     save({ ...load(), expenses });
@@ -911,20 +1002,20 @@ export async function addShoppingListItem(
       id: crypto.randomUUID(),
       is_ordered: false,
       checked: false,
-      created_at: now,
-      updated_at: now,
+      createdAt: now,
+      updatedAt: now,
     };
 
     const { error } = await supabase
       .from('shopping_list_items')
       .insert({
         id: newItem.id,
-        product_id: newItem.product_id || newItem.productId,
+        product_id: newItem.productId,
         quantity: newItem.quantity,
         is_ordered: false,
         checked: false,
-        created_at: now,
-        updated_at: now,
+        createdAt: now,
+        updatedAt: now,
       });
 
     if (error) throw error;
@@ -941,14 +1032,216 @@ export async function addShoppingListItem(
     const newItem: ShoppingListItem = {
       ...item,
       id: crypto.randomUUID(),
-      is_ordered: false,
+      isOrdered: false,
       checked: false,
-      created_at: now,
-      updated_at: now,
+      createdAt: now,
+      updatedAt: now,
     };
     list.push(newItem);
     save({ ...load(), shoppingList: list });
     return newItem;
+  }
+}
+
+/**
+ * Delete a sale and its associated items, and restore stock
+ */
+export async function deleteSale(saleId: string): Promise<boolean> {
+  try {
+    const data = load();
+    const sale = data.sales.find(s => s.id === saleId);
+    
+    if (!sale) return false;
+
+    // Get sale items
+    const saleItems = data.saleItems.filter(si => si.saleId === saleId);
+
+    // Restore stock for each item
+    for (const item of saleItems) {
+      await addProductBatch({
+        productId: item.productId,
+        quantity: item.quantity,
+        expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+        costPerUnit: 0,
+      });
+    }
+
+    // Delete from Supabase
+    const { error: itemsError } = await supabase
+      .from('sale_items')
+      .delete()
+      .eq('sale_id', saleId);
+
+    if (itemsError) throw itemsError;
+
+    const { error: saleError } = await supabase
+      .from('sales')
+      .delete()
+      .eq('id', saleId);
+
+    if (saleError) throw saleError;
+
+    // Delete from localStorage
+    data.sales = data.sales.filter(s => s.id !== saleId);
+    data.saleItems = data.saleItems.filter(si => si.saleId !== saleId);
+    save(data);
+
+    return true;
+  } catch (error) {
+    console.error('Error deleting sale:', error);
+    // Fallback to localStorage only
+    const data = load();
+    const saleItems = data.saleItems.filter(si => si.saleId === saleId);
+    
+    // Restore stock
+    for (const item of saleItems) {
+      const batches = data.productBatches.filter(b => b.productId === item.productId);
+      const totalQty = batches.reduce((sum, b) => sum + b.quantity, 0);
+      
+      // Add back as a single batch
+      data.productBatches.push({
+        id: crypto.randomUUID(),
+        productId: item.productId,
+        quantity: item.quantity,
+        expiryDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        costPerUnit: 0,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    
+    data.sales = data.sales.filter(s => s.id !== saleId);
+    data.saleItems = data.saleItems.filter(si => si.saleId !== saleId);
+    save(data);
+    return true;
+  }
+}
+
+/**
+ * Update a sale record
+ */
+export async function updateSale(saleId: string, updates: Partial<Sale>): Promise<Sale | null> {
+  try {
+    const data = load();
+    const sale = data.sales.find(s => s.id === saleId);
+    
+    if (!sale) return null;
+
+    const updatedSale: Sale = { ...sale, ...updates };
+
+    // Update in Supabase
+    const { error } = await supabase
+      .from('sales')
+      .update({
+        customer_id: updatedSale.customerId,
+        customer_type: updatedSale.customerType,
+        payment_method: updatedSale.paymentMethod,
+        payment_nominal: updatedSale.paymentNominal,
+        total_amount: updatedSale.totalAmount,
+        receipt_url: updatedSale.receiptUrl,
+      })
+      .eq('id', saleId);
+
+    if (error) throw error;
+
+    // Update in localStorage
+    const index = data.sales.findIndex(s => s.id === saleId);
+    if (index !== -1) {
+      data.sales[index] = updatedSale;
+      save(data);
+    }
+
+    return updatedSale;
+  } catch (error) {
+    console.error('Error updating sale:', error);
+    // Fallback to localStorage
+    const data = load();
+    const index = data.sales.findIndex(s => s.id === saleId);
+    
+    if (index === -1) return null;
+
+    const updatedSale: Sale = { ...data.sales[index], ...updates };
+    data.sales[index] = updatedSale;
+    save(data);
+    return updatedSale;
+  }
+}
+
+/**
+ * Update sale items and recalculate the total amount
+ */
+export async function updateSaleItems(saleId: string, newItems: SaleItem[]): Promise<Sale | null> {
+  try {
+    const data = load();
+    const sale = data.sales.find(s => s.id === saleId);
+    
+    if (!sale) return null;
+
+    // Calculate new total amount
+    const newTotalAmount = newItems.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
+
+    // Update sale items in Supabase
+    const { error: deleteError } = await supabase
+      .from('sale_items')
+      .delete()
+      .eq('sale_id', saleId);
+
+    if (deleteError) throw deleteError;
+
+    // Insert new items
+    const saleItemsToInsert = newItems.map(item => ({
+      id: item.id || crypto.randomUUID(),
+      sale_id: saleId,
+      product_id: item.productId,
+      quantity: item.quantity,
+      unit_price: item.unitPrice || 0,
+      total_price: item.totalPrice || 0,
+    }));
+
+    if (saleItemsToInsert.length > 0) {
+      const { error: insertError } = await supabase
+        .from('sale_items')
+        .insert(saleItemsToInsert);
+
+      if (insertError) throw insertError;
+    }
+
+    // Update sale with new total amount
+    const { error: updateError } = await supabase
+      .from('sales')
+      .update({ total_amount: newTotalAmount })
+      .eq('id', saleId);
+
+    if (updateError) throw updateError;
+
+    // Update localStorage
+    const saleIndex = data.sales.findIndex(s => s.id === saleId);
+    if (saleIndex !== -1) {
+      data.sales[saleIndex].items = newItems;
+      data.sales[saleIndex].totalAmount = newTotalAmount;
+    }
+    
+    data.saleItems = data.saleItems.filter(si => si.saleId !== saleId);
+    data.saleItems.push(...newItems);
+    save(data);
+
+    return data.sales[saleIndex] || null;
+  } catch (error) {
+    console.error('Error updating sale items:', error);
+    // Fallback to localStorage
+    const data = load();
+    const saleIndex = data.sales.findIndex(s => s.id === saleId);
+    
+    if (saleIndex === -1) return null;
+
+    const newTotalAmount = newItems.reduce((sum, item) => sum + (item.totalPrice || 0), 0);
+    data.sales[saleIndex].items = newItems;
+    data.sales[saleIndex].totalAmount = newTotalAmount;
+    
+    data.saleItems = data.saleItems.filter(si => si.saleId !== saleId);
+    data.saleItems.push(...newItems);
+    save(data);
+
+    return data.sales[saleIndex];
   }
 }
 
@@ -963,8 +1256,8 @@ export async function updateShoppingList(
         .from('shopping_list_items')
         .update({
           quantity: u.quantity,
-          is_ordered: u.is_ordered ?? u.checked,
-          checked: u.checked ?? u.is_ordered,
+          is_ordered: u.isOrdered ?? u.checked,
+          checked: u.checked ?? u.isOrdered,
           updated_at: now,
         })
         .eq('id', u.id);
@@ -979,7 +1272,7 @@ export async function updateShoppingList(
         list[i] = { 
           ...list[i], 
           ...u,
-          updated_at: now,
+          updatedAt: now,
         };
       }
     }
@@ -994,7 +1287,7 @@ export async function updateShoppingList(
         list[i] = { 
           ...list[i], 
           ...u,
-          updated_at: now,
+          updatedAt: now,
         };
       }
     }
