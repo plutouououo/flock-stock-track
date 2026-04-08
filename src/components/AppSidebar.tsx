@@ -5,6 +5,7 @@ import {
   BarChart3,
   ClipboardList,
   Users,
+  DollarSign,
   ChevronLeft,
   LogOut,
 } from "lucide-react";
@@ -32,6 +33,7 @@ const navItems = [
   { title: "Reports", url: "/reports", icon: BarChart3 },
   { title: "Shopping List", url: "/shopping-list", icon: ClipboardList },
   { title: "Customers", url: "/customers", icon: Users },
+  { title: "Expenses", url: "/expenses", icon: DollarSign },
 ];
 
 export function AppSidebar() {
@@ -61,7 +63,7 @@ export function AppSidebar() {
           {!collapsed && (
             <div className="flex flex-col animate-fade-in">
               <span className="text-sm font-bold text-sidebar-accent-foreground">
-                PoultryMart
+                Aneka Jaya 33
               </span>
               <span className="text-xs text-sidebar-foreground/60">
                 Sales Manager

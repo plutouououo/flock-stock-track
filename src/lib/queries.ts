@@ -26,7 +26,11 @@ type DeleteProductParams = string;
 type AddProductBatchParams = Parameters<typeof storage.addProductBatch>[0];
 type RecordSaleParams = Omit<Sale, "id" | "created_at">;
 type AddCustomerParams = Parameters<typeof storage.addCustomer>[0];
+type UpdateCustomerParams = { id: string; updates: Partial<Omit<Customer, "id" | "createdAt" | "updatedAt">> };
+type DeleteCustomerParams = string;
 type AddExpenseParams = Parameters<typeof storage.addExpense>[0];
+type UpdateExpenseParams = { id: string; updates: Partial<Omit<Expense, "id" | "createdAt">> };
+type DeleteExpenseParams = string;
 type AddShoppingListItemParams = Parameters<typeof storage.addShoppingListItem>[0];
 type UpdateShoppingListParams = Parameters<typeof storage.updateShoppingList>[0];
 type RemoveShoppingListItemParams = Parameters<typeof storage.removeShoppingListItem>[0];
@@ -314,12 +318,80 @@ export function useAddCustomer() {
   });
 }
 
+export function useUpdateCustomer() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async ({ id, updates }: UpdateCustomerParams) => {
+      const result = await storage.updateCustomer(id, updates);
+      if (!result) {
+        throw new Error(`Customer with id ${id} not found`);
+      }
+      return result;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.customers });
+    },
+  });
+}
+
+export function useDeleteCustomer() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (id: DeleteCustomerParams) => {
+      const success = await storage.deleteCustomer(id);
+      if (!success) {
+        throw new Error(`Customer with id ${id} not found or could not be deleted`);
+      }
+      return success;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.customers });
+    },
+  });
+}
+
 export function useAddExpense() {
   const queryClient = useQueryClient();
   
   return useMutation({
     mutationFn: async (expense: AddExpenseParams) => {
       return await storage.addExpense(expense);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.expenses });
+    },
+  });
+}
+
+export function useUpdateExpense() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async ({ id, updates }: UpdateExpenseParams) => {
+      const result = await storage.updateExpense(id, updates);
+      if (!result) {
+        throw new Error(`Expense with id ${id} not found`);
+      }
+      return result;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.expenses });
+    },
+  });
+}
+
+export function useDeleteExpense() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async (id: DeleteExpenseParams) => {
+      const success = await storage.deleteExpense(id);
+      if (!success) {
+        throw new Error(`Expense with id ${id} not found or could not be deleted`);
+      }
+      return success;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.expenses });

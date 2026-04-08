@@ -98,6 +98,7 @@ export interface Sale {
   paymentMethod?: PaymentMethod;
   paymentNominal?: number;
   totalAmount?: number;
+  shippingCost?: number;
   receiptUrl?: string;
   createdAt?: string;
 }
@@ -110,6 +111,7 @@ export interface SaleDB {
   payment_method: PaymentMethod;
   payment_nominal?: number;
   total_amount: number;
+  shipping_cost?: number;
   receipt_url?: string;
   created_at: string;
 }
@@ -140,6 +142,8 @@ export interface Expense {
   date: string; // YYYY-MM-DD
   description?: string;
   amount: number;
+  category?: string;
+  notes?: string;
   createdAt: string;
 }
 
@@ -149,6 +153,8 @@ export interface ExpenseDB {
   date: string; // YYYY-MM-DD
   description?: string;
   amount: number;
+  category?: string;
+  notes?: string;
   created_at: string;
 }
 

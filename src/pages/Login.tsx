@@ -121,7 +121,7 @@ export default function Login() {
               <span className="text-lg font-bold text-primary-foreground">PM</span>
             </div>
           </div>
-          <CardTitle className="text-2xl">PoultryMart</CardTitle>
+          <CardTitle className="text-2xl">Aneka Jaya 33</CardTitle>
           <CardDescription>Sales Management System</CardDescription>
         </CardHeader>
 

@@ -5,7 +5,6 @@
 
 import type { AppData, Product, Sale, ShoppingListItem, ProductBatch, SaleItem, Customer, Expense, Setting, SaleDB, SaleItemDB, ExpenseDB, ProductBatchDB, ProductDB, ShoppingListItemDB, CustomerDB, SettingDB } from "@/types";
 import { supabase } from "./supabase";
-import { map } from "zod";
 
 const STORAGE_KEY = "poultrymart_data";
 
@@ -53,24 +52,6 @@ function save(data: AppData): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-// Helper function to convert snake_case to camelCase for frontend
-function toCamelCase(str: string): string {
-  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
-}
-
-// Ga dipake soalnya ini transformer generic 
-// Transform database record to frontend type (snake_case to camelCase)
-// function transformDbToFrontend<T>(record: any): T {
-//   if (!record) return record;
-  
-//   const transformed: any = {};
-//   for (const [key, value] of Object.entries(record)) {
-//     const camelKey = toCamelCase(key);
-//     transformed[camelKey] = value;
-//   }
-//   return transformed as T;
-// }
-
 function mapSale(sale: SaleDB): Sale {
   return {
     id: sale.id,
@@ -80,6 +61,7 @@ function mapSale(sale: SaleDB): Sale {
     paymentMethod: sale.payment_method,
     paymentNominal: sale.payment_nominal,
     totalAmount: sale.total_amount,
+    shippingCost: sale.shipping_cost,
     receiptUrl: sale.receipt_url,
     createdAt: sale.created_at,
     items: [] // items will be populated separately
@@ -104,6 +86,8 @@ function mapExpense(expense: ExpenseDB): Expense {
     date: expense.date,
     description: expense.description,
     amount: expense.amount,
+    category: expense.category,
+    notes: expense.notes,
     createdAt: expense.created_at
   };
 }
@@ -166,6 +150,103 @@ function mapSetting(setting: SettingDB): Setting {
   };
 }
   
+function mapShoppingListItemDB(list: ShoppingListItem): ShoppingListItemDB {
+  return {
+    id: list.id,
+    product_id: list.productId,
+    quantity: list.quantity,
+    is_ordered: list.isOrdered,
+    checked: list.checked,
+    created_at: list.createdAt,
+    updated_at: list.updatedAt
+  };
+}
+
+function mapProductDB(product: Product): ProductDB {
+  return {
+    id: product.id,
+    name: product.name,
+    sku: product.sku,
+    category: product.category,
+    price: product.price,
+    threshold: product.threshold,
+    image_url: product.imageUrl,
+    created_at: product.createdAt,
+    updated_at: product.updatedAt
+  };
+}
+
+function mapProductBatchDB(batch: ProductBatch): ProductBatchDB {
+  return {
+    id: batch.id,
+    product_id: batch.productId,
+    quantity: batch.quantity,
+    expiry_date: batch.expiryDate,
+    cost_per_unit: batch.costPerUnit,
+    created_at: batch.createdAt,
+  };
+}
+
+function mapSaleDB(sale: Sale): SaleDB {
+  return {
+    id: sale.id,
+    cashier_id: sale.cashierId,
+    customer_id: sale.customerId,
+    customer_type: sale.customerType,
+    payment_method: sale.paymentMethod,
+    payment_nominal: sale.paymentNominal,
+    total_amount: sale.totalAmount,
+    shipping_cost: sale.shippingCost,
+    receipt_url: sale.receiptUrl,
+    created_at: sale.createdAt,
+  };
+}
+
+function mapSaleItemDB(item: SaleItem): SaleItemDB {
+  return {
+    id: item.id,
+    sale_id: item.saleId,
+    product_id: item.productId,
+    quantity: item.quantity,
+    unit_price: item.unitPrice,
+    total_price: item.totalPrice,
+  };
+}
+
+function mapCustomerDB(customer: Customer): CustomerDB {
+  return {
+    id: customer.id,
+    name: customer.name,
+    phone: customer.phone,
+    address: customer.address,
+    created_at: customer.createdAt,
+    updated_at: customer.updatedAt
+  };
+}
+
+function mapExpenseDB(expense: Expense): ExpenseDB {
+  return {
+    id: expense.id,
+    type: expense.type,
+    date: expense.date,
+    description: expense.description,
+    amount: expense.amount,
+    category: expense.category,
+    notes: expense.notes,
+    created_at: expense.createdAt,
+  };
+}
+
+function mapSettingDB(setting: Setting): SettingDB {
+  return {
+    id: setting.id,
+    key: setting.key,
+    value: setting.value,
+    created_at: setting.createdAt,
+    updated_at: setting.updatedAt,
+  };
+}
+
 // Helper to get current user
 async function getCurrentUserId(): Promise<string> {
   const { data: { user } } = await supabase.auth.getUser();
@@ -274,6 +355,7 @@ export async function migrateToSupabase(): Promise<void> {
         payment_method: sale.paymentMethod,
         payment_nominal: sale.paymentNominal,
         total_amount: sale.totalAmount,
+        shipping_cost: sale.shippingCost,
         receipt_url: sale.receiptUrl,
         created_at: sale.createdAt,
       })
@@ -506,17 +588,7 @@ export async function addProduct(product: Omit<Product, "id" | "created_at" | "u
     // Save to Supabase
     const { data, error } = await supabase
       .from('products')
-      .insert({
-        id: newProduct.id,
-        name: newProduct.name,
-        sku: newProduct.sku,
-        category: newProduct.category ?? 'Lainnya', // ← tambah
-        price: newProduct.price,
-        threshold: newProduct.threshold,
-        image_url: newProduct.imageUrl,
-        created_at: now,
-        updated_at: now,
-      })
+      .insert(mapProductDB(newProduct))
       .select()
       .single();
 
@@ -648,7 +720,13 @@ export async function deleteProduct(id: string): Promise<boolean> {
       .delete()
       .eq('id', id);
 
-    if (error) throw error;
+    if (error) {
+      // Check if it's a foreign key constraint error
+      if (error.code === '23503' || error.message?.includes('foreign key constraint')) {
+        throw new Error('Produk ini sudah pernah dijual dan tidak bisa dihapus. Anda dapat mengedit atau menonaktifkan produk.');
+      }
+      throw error;
+    }
 
     // Update localStorage
     const data = load();
@@ -664,7 +742,9 @@ export async function deleteProduct(id: string): Promise<boolean> {
     const data = load();
     const originalLength = data.products.length;
     data.products = data.products.filter((p) => p.id !== id);
-    if (data.products.length === originalLength) return false;
+    if (data.products.length === originalLength) {
+      throw new Error('Produk tidak ditemukan');
+    }
     
     data.productBatches = data.productBatches.filter((b) => b.productId !== id);
     data.shoppingList = data.shoppingList.filter((item) => item.productId !== id);
@@ -731,17 +811,7 @@ export async function addSale(sale: Omit<Sale, "id" | "created_at">): Promise<Sa
     // Save sale to Supabase
     const { data: saleData, error: saleError } = await supabase
       .from('sales')
-      .insert({
-        id: newSale.id,
-        cashier_id: userId,
-        customer_id: newSale.customerId,
-        customer_type: newSale.customerType,
-        payment_method: newSale.paymentMethod,
-        payment_nominal: newSale.paymentNominal,
-        total_amount: newSale.totalAmount,
-        receipt_url: newSale.receiptUrl,
-        created_at: now,
-      })
+      .insert(mapSaleDB(newSale))
       .select()
       .single();
 
@@ -918,14 +988,7 @@ export async function addCustomer(customer: Omit<Customer, "id" | "createdAt" | 
 
     const { error } = await supabase
       .from('customers')
-      .insert({
-        id: newCustomer.id,
-        name: newCustomer.name,
-        phone: newCustomer.phone,
-        address: newCustomer.address,
-        created_at: now,
-        updated_at: now,
-      });
+      .insert(mapCustomerDB(newCustomer));
 
     if (error) throw error;
 
@@ -950,25 +1013,92 @@ export async function addCustomer(customer: Omit<Customer, "id" | "createdAt" | 
   }
 }
 
-export async function addExpense(expense: Omit<Expense, "id" | "created_at">): Promise<Expense> {
+export async function updateCustomer(id: string, updates: Partial<Omit<Customer, "id" | "createdAt" | "updatedAt">>): Promise<Customer | undefined> {
+  try {
+    const now = new Date().toISOString();
+    
+    const { error } = await supabase
+      .from('customers')
+      .update({
+        name: updates.name,
+        phone: updates.phone,
+        address: updates.address,
+        updated_at: now,
+      })
+      .eq('id', id);
+
+    if (error) throw error;
+
+    // Update localStorage
+    const data = load();
+    const idx = data.customers.findIndex((c) => c.id === id);
+    if (idx !== -1) {
+      data.customers[idx] = {
+        ...data.customers[idx],
+        ...updates,
+        updatedAt: now,
+      };
+      save(data);
+      return data.customers[idx];
+    }
+
+    return undefined;
+  } catch (error) {
+    console.error('Error updating customer in Supabase, falling back to localStorage:', error);
+    // Fallback to localStorage
+    const data = load();
+    const idx = data.customers.findIndex((c) => c.id === id);
+    if (idx === -1) return undefined;
+    
+    data.customers[idx] = {
+      ...data.customers[idx],
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    save(data);
+    return data.customers[idx];
+  }
+}
+
+export async function deleteCustomer(id: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('customers')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    // Update localStorage
+    const data = load();
+    data.customers = data.customers.filter((c) => c.id !== id);
+    save(data);
+
+    return true;
+  } catch (error) {
+    console.error('Error deleting customer from Supabase, falling back to localStorage:', error);
+    // Fallback to localStorage
+    const data = load();
+    const originalLength = data.customers.length;
+    data.customers = data.customers.filter((c) => c.id !== id);
+    const success = data.customers.length < originalLength;
+    if (success) save(data);
+    return success;
+  }
+}
+
+export async function addExpense(expense: Omit<Expense, "id" | "createdAt">): Promise<Expense> {
   try {
     const now = new Date().toISOString();
     const newExpense = {
       ...expense,
       id: crypto.randomUUID(),
-      created_at: now,
+      createdAt: now,
     };
 
     const { error } = await supabase
       .from('expenses')
-      .insert({
-        id: newExpense.id,
-        type: newExpense.type,
-        date: newExpense.date,
-        description: newExpense.description,
-        amount: newExpense.amount,
-        created_at: now,
-      });
+      .insert(mapExpenseDB(newExpense));
 
     if (error) throw error;
 
@@ -992,6 +1122,80 @@ export async function addExpense(expense: Omit<Expense, "id" | "created_at">): P
   }
 }
 
+export async function updateExpense(id: string, updates: Partial<Omit<Expense, "id" | "createdAt">>): Promise<Expense | undefined> {
+  try {
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('expenses')
+      .update({
+        type: updates.type,
+        date: updates.date,
+        description: updates.description,
+        amount: updates.amount,
+        category: updates.category,
+        notes: updates.notes,
+        updated_at: now,
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // Update localStorage
+    const expenses = load().expenses;
+    const idx = expenses.findIndex((e) => e.id === id);
+    if (idx !== -1) {
+      expenses[idx] = {
+        ...expenses[idx],
+        ...updates,
+        createdAt: expenses[idx].createdAt,
+      };
+      save({ ...load(), expenses });
+    }
+
+    return data ? mapExpense(data) : undefined;
+  } catch (error) {
+    console.error('Error updating expense in Supabase, falling back to localStorage:', error);
+    // Fallback to localStorage
+    const expenses = load().expenses;
+    const idx = expenses.findIndex((e) => e.id === id);
+    if (idx === -1) return undefined;
+    
+    expenses[idx] = {
+      ...expenses[idx],
+      ...updates,
+      createdAt: expenses[idx].createdAt,
+    };
+    save({ ...load(), expenses });
+    return expenses[idx];
+  }
+}
+
+export async function deleteExpense(id: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    // Update localStorage
+    const expenses = load().expenses.filter((e) => e.id !== id);
+    save({ ...load(), expenses });
+
+    return true;
+  } catch (error) {
+    console.error('Error deleting expense from Supabase, falling back to localStorage:', error);
+    // Fallback to localStorage
+    const expenses = load().expenses.filter((e) => e.id !== id);
+    save({ ...load(), expenses });
+    return true;
+  }
+}
+
 export async function addShoppingListItem(
   item: Omit<ShoppingListItem, "id" | "created_at" | "updated_at" | "is_ordered" | "checked">
 ): Promise<ShoppingListItem> {
@@ -1005,18 +1209,10 @@ export async function addShoppingListItem(
       createdAt: now,
       updatedAt: now,
     };
-
+    
     const { error } = await supabase
       .from('shopping_list_items')
-      .insert({
-        id: newItem.id,
-        product_id: newItem.productId,
-        quantity: newItem.quantity,
-        is_ordered: false,
-        checked: false,
-        createdAt: now,
-        updatedAt: now,
-      });
+      .insert(mapShoppingListItemDB(newItem));
 
     if (error) throw error;
 

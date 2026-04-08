@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { Package, ShoppingCart, TrendingUp, AlertTriangle } from "lucide-react";
 import { Link } from "react-router-dom";
-import { useProducts, useSales } from "@/lib/queries";
+import { useProducts, useSales, useCustomers } from "@/lib/queries";
 import { getProductStock } from "@/lib/storage";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
@@ -92,6 +92,7 @@ function useProductsWithStock() {
 export default function Dashboard() {
   const { products, getStock, getLowStockProducts, getLowStockCount } = useProductsWithStock();
   const { data: sales = [] } = useSales();
+  const { data: customers = [] } = useCustomers();
 
   const stats = useMemo(() => {
     const today = format(new Date(), "yyyy-MM-dd");
@@ -192,13 +193,14 @@ export default function Dashboard() {
             <ul className="space-y-2">
               {recentSales.map((s) => {
                 const saleDate = s.createdAt || '';
-                const customerType = s.customerType || 'Unknown';
+                const customer = s.customerId ? customers.find(c => c.id === s.customerId) : null;
+                const customerDisplay = customer ? customer.name : (s.customerType || 'Unknown');
                 const total = s.totalAmount|| 0;
                 
                 return (
                   <li key={s.id} className="flex justify-between text-sm">
                     <span className="text-muted-foreground">
-                      {saleDate ? format(new Date(saleDate), "dd MMM, HH:mm") : 'Unknown'} · {customerType}
+                      {saleDate ? format(new Date(saleDate), "dd MMM, HH:mm") : 'Unknown'} · {customerDisplay}
                     </span>
                     <span className="font-medium">{formatRupiah(total)}</span>
                   </li>

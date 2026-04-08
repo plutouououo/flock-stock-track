@@ -2,14 +2,14 @@ import { useMemo, useState } from "react";
 import {
   Users,
   Search,
-  ChevronDown,
   Phone,
   MapPin,
-  Calendar,
   DollarSign,
   ShoppingCart,
   TrendingUp,
   Plus,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -29,8 +30,19 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { useSales, useProducts } from "@/lib/queries";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { useSales, useProducts, useCustomers, useAddCustomer, useUpdateCustomer, useDeleteCustomer } from "@/lib/queries";
 import { format } from "date-fns";
+import { useToast } from "@/hooks/use-toast";
 import type { Customer, Sale } from "@/types";
 
 function formatRupiah(n: number): string {
@@ -42,7 +54,7 @@ function formatRupiah(n: number): string {
 }
 
 interface CustomerAnalytics {
-  customer: Customer | { id: string; name: string; phone?: string; address?: string };
+  customer: Customer;
   totalSpent: number;
   purchaseCount: number;
   favoriteProducts: Array<{ productId: string; name: string; quantity: number; spent: number }>;
@@ -50,89 +62,105 @@ interface CustomerAnalytics {
   sales: Sale[];
 }
 
+interface FormData {
+  name: string;
+  phone: string;
+  address: string;
+}
+
 export default function Customers() {
+  const { data: allCustomers = [] } = useCustomers();
   const { data: sales = [] } = useSales();
   const { data: products = [] } = useProducts();
+  
+  const addCustomer = useAddCustomer();
+  const updateCustomer = useUpdateCustomer();
+  const deleteCustomer = useDeleteCustomer();
+  const { toast } = useToast();
 
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCustomer, setSelectedCustomer] = useState<CustomerAnalytics | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [formData, setFormData] = useState<FormData>({
+    name: "",
+    phone: "",
+    address: "",
+  });
 
-  // Build customer analytics from sales data
+  // Build customer analytics combining DB customers with sales data
   const customerAnalytics = useMemo(() => {
-    const customerMap = new Map<string, CustomerAnalytics>();
+    const analyticsMap = new Map<string, CustomerAnalytics>();
 
-    sales.forEach((sale) => {
-      const customerKey = sale.customerId || sale.customerType || "Walk-in";
-      const customerName =
-        sale.customerId && customerMap.get(sale.customerId)?.customer.name
-          ? (customerMap.get(sale.customerId)?.customer.name as string)
-          : sale.customerType || "Walk-in";
-
-      if (!customerMap.has(customerKey)) {
-        customerMap.set(customerKey, {
-          customer: {
-            id: customerKey,
-            name: customerName,
-            phone: sale.customerId ? "" : undefined,
-            address: sale.customerId ? "" : undefined,
-          },
-          totalSpent: 0,
-          purchaseCount: 0,
-          favoriteProducts: [],
-          sales: [],
-        });
-      }
-
-      const analytics = customerMap.get(customerKey)!;
-      analytics.totalSpent += sale.totalAmount || 0;
-      analytics.purchaseCount += 1;
-      analytics.lastPurchase = sale.createdAt;
-      analytics.sales.push(sale);
-
-      // Track products
-      const productMap = new Map<
-        string,
-        { productId: string; name: string; quantity: number; spent: number }
-      >();
-
-      sale.items.forEach((item) => {
-        const product = products.find((p) => p.id === item.productId);
-        const key = item.productId || "unknown";
-
-        if (!productMap.has(key)) {
-          productMap.set(key, {
-            productId: key,
-            name: product?.name || "Unknown",
-            quantity: 0,
-            spent: 0,
-          });
-        }
-
-        const prod = productMap.get(key)!;
-        prod.quantity += item.quantity;
-        prod.spent += item.totalPrice || 0;
+    // Add all DB customers first
+    allCustomers.forEach((customer) => {
+      analyticsMap.set(customer.id, {
+        customer,
+        totalSpent: 0,
+        purchaseCount: 0,
+        favoriteProducts: [],
+        sales: [],
       });
-
-      analytics.favoriteProducts = Array.from(productMap.values()).sort(
-        (a, b) => b.spent - a.spent
-      );
     });
 
-    return Array.from(customerMap.values()).sort(
+    // Aggregate sales data
+    sales.forEach((sale) => {
+      const customerId = sale.customerId;
+      if (customerId && analyticsMap.has(customerId)) {
+        const analytics = analyticsMap.get(customerId)!;
+        analytics.totalSpent += sale.totalAmount || 0;
+        analytics.purchaseCount += 1;
+        analytics.lastPurchase = sale.createdAt;
+        analytics.sales.push(sale);
+
+        // Track favorite products
+        const productMap = new Map<
+          string,
+          { productId: string; name: string; quantity: number; spent: number }
+        >();
+
+        sale.items.forEach((item) => {
+          const product = products.find((p) => p.id === item.productId);
+          const key = item.productId || "unknown";
+
+          if (!productMap.has(key)) {
+            productMap.set(key, {
+              productId: key,
+              name: product?.name || "Unknown",
+              quantity: 0,
+              spent: 0,
+            });
+          }
+
+          const prod = productMap.get(key)!;
+          prod.quantity += item.quantity;
+          prod.spent += item.totalPrice || 0;
+        });
+
+        analytics.favoriteProducts = Array.from(productMap.values()).sort(
+          (a, b) => b.spent - a.spent
+        );
+      }
+    });
+
+    return Array.from(analyticsMap.values()).sort(
       (a, b) => b.totalSpent - a.totalSpent
     );
-  }, [sales, products]);
+  }, [allCustomers, sales, products]);
 
   const filteredCustomers = useMemo(() => {
     if (!searchQuery) return customerAnalytics;
 
     return customerAnalytics.filter((c) =>
-      c.customer.name.toLowerCase().includes(searchQuery.toLowerCase())
+      c.customer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      c.customer.phone?.toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [customerAnalytics, searchQuery]);
 
-  const totalCustomers = useMemo(() => customerAnalytics.length, [customerAnalytics]);
+  const totalCustomers = allCustomers.length;
   const totalRevenue = useMemo(
     () => customerAnalytics.reduce((sum, c) => sum + c.totalSpent, 0),
     [customerAnalytics]
@@ -147,18 +175,105 @@ export default function Customers() {
     [customerAnalytics]
   );
 
-  const handleViewDetails = (customer: CustomerAnalytics) => {
+  // Form handlers
+  const resetForm = () => {
+    setFormData({ name: "", phone: "", address: "" });
+    setIsEditing(false);
+  };
+
+  const handleAdd = () => {
+    resetForm();
+    setIsFormOpen(true);
+  };
+
+  const handleEdit = (customer: Customer) => {
+    setFormData({
+      name: customer.name,
+      phone: customer.phone || "",
+      address: customer.address || "",
+    });
+    setSelectedCustomer(customer);
+    setIsEditing(true);
+    setIsFormOpen(true);
+  };
+
+  const handleDeleteClick = (customer: Customer) => {
+    setDeleteTarget(customer);
+    setIsDeleteOpen(true);
+  };
+
+  const handleFormSubmit = async () => {
+    if (!formData.name.trim()) {
+      toast({ title: "Error", description: "Customer name is required", variant: "destructive" });
+      return;
+    }
+
+    try {
+      if (isEditing && selectedCustomer) {
+        await updateCustomer.mutateAsync({
+          id: selectedCustomer.id,
+          updates: {
+            name: formData.name,
+            phone: formData.phone || undefined,
+            address: formData.address || undefined,
+          },
+        });
+        toast({ title: "Customer updated successfully" });
+      } else {
+        await addCustomer.mutateAsync({
+          name: formData.name,
+          phone: formData.phone || undefined,
+          address: formData.address || undefined,
+        });
+        toast({ title: "Customer added successfully" });
+      }
+      setIsFormOpen(false);
+      resetForm();
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: String(error),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await deleteCustomer.mutateAsync(deleteTarget.id);
+      toast({ title: "Customer deleted successfully" });
+      setIsDeleteOpen(false);
+      setDeleteTarget(null);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: String(error),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleViewDetails = (customer: Customer) => {
     setSelectedCustomer(customer);
     setIsDetailsOpen(true);
   };
+
+  const selectedCustomerAnalytics = selectedCustomer
+    ? customerAnalytics.find((c) => c.customer.id === selectedCustomer.id)
+    : null;
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
           <h1 className="page-header">Customers</h1>
-          <p className="page-description">Track customer purchases and spending</p>
+          <p className="page-description">Manage customers and track purchases</p>
         </div>
+        <Button onClick={handleAdd} className="gap-2">
+          <Plus className="h-4 w-4" />
+          Add Customer
+        </Button>
       </div>
 
       {/* Summary Cards */}
@@ -170,9 +285,7 @@ export default function Customers() {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold">{totalCustomers}</p>
-            <p className="text-xs text-muted-foreground">
-              {customerAnalytics.length} unique customer types
-            </p>
+            <p className="text-xs text-muted-foreground">Active customers</p>
           </CardContent>
         </Card>
 
@@ -194,7 +307,7 @@ export default function Customers() {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold">{formatRupiah(avgCustomerValue)}</p>
-            <p className="text-xs text-muted-foreground">Average spending per customer</p>
+            <p className="text-xs text-muted-foreground">Average spending</p>
           </CardContent>
         </Card>
       </div>
@@ -220,24 +333,24 @@ export default function Customers() {
             <TableBody>
               {topCustomers.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-muted-foreground py-4">
+                  <TableCell colSpan={5} className="text-center text-muted-foreground py-4">
                     No customers yet
                   </TableCell>
                 </TableRow>
               ) : (
-                topCustomers.map((customer) => (
+                topCustomers.map((analytics) => (
                   <TableRow
-                    key={customer.customer.id}
+                    key={analytics.customer.id}
                     className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => handleViewDetails(customer)}
+                    onClick={() => handleViewDetails(analytics.customer)}
                   >
-                    <TableCell className="font-medium">{customer.customer.name}</TableCell>
-                    <TableCell className="text-right">{customer.purchaseCount}</TableCell>
+                    <TableCell className="font-medium">{analytics.customer.name}</TableCell>
+                    <TableCell className="text-right">{analytics.purchaseCount}</TableCell>
                     <TableCell className="text-right font-semibold">
-                      {formatRupiah(customer.totalSpent)}
+                      {formatRupiah(analytics.totalSpent)}
                     </TableCell>
                     <TableCell className="text-right">
-                      {formatRupiah(customer.totalSpent / customer.purchaseCount)}
+                      {formatRupiah(analytics.totalSpent / Math.max(analytics.purchaseCount, 1))}
                     </TableCell>
                   </TableRow>
                 ))
@@ -268,11 +381,11 @@ export default function Customers() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Customer Name</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Phone</TableHead>
                   <TableHead className="text-right">Purchases</TableHead>
                   <TableHead className="text-right">Total Spent</TableHead>
-                  <TableHead className="text-right">Last Purchase</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -283,25 +396,38 @@ export default function Customers() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredCustomers.map((customer) => (
-                    <TableRow key={customer.customer.id}>
-                      <TableCell className="font-medium">{customer.customer.name}</TableCell>
-                      <TableCell className="text-right">{customer.purchaseCount}</TableCell>
+                  filteredCustomers.map((analytics) => (
+                    <TableRow key={analytics.customer.id}>
+                      <TableCell className="font-medium">{analytics.customer.name}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {analytics.customer.phone || "—"}
+                      </TableCell>
+                      <TableCell className="text-right">{analytics.purchaseCount}</TableCell>
                       <TableCell className="text-right font-semibold">
-                        {formatRupiah(customer.totalSpent)}
+                        {formatRupiah(analytics.totalSpent)}
                       </TableCell>
-                      <TableCell className="text-right text-sm text-muted-foreground">
-                        {customer.lastPurchase
-                          ? format(new Date(customer.lastPurchase), "dd MMM yyyy")
-                          : "N/A"}
-                      </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right gap-2 flex justify-end">
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => handleViewDetails(customer)}
+                          onClick={() => handleViewDetails(analytics.customer)}
                         >
-                          View Details
+                          View
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleEdit(analytics.customer)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => handleDeleteClick(analytics.customer)}
+                        >
+                          <Trash2 className="h-4 w-4" />
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -313,6 +439,49 @@ export default function Customers() {
         </CardContent>
       </Card>
 
+      {/* Add/Edit Customer Dialog */}
+      <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{isEditing ? "Edit Customer" : "Add New Customer"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Customer Name *</Label>
+              <Input
+                placeholder="Enter customer name"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Phone</Label>
+              <Input
+                placeholder="Enter phone number"
+                value={formData.phone}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Address</Label>
+              <Input
+                placeholder="Enter address"
+                value={formData.address}
+                onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsFormOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleFormSubmit}>
+              {isEditing ? "Update" : "Add"} Customer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Customer Details Dialog */}
       <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
         <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -320,18 +489,26 @@ export default function Customers() {
             <DialogTitle>Customer Details</DialogTitle>
           </DialogHeader>
 
-          {selectedCustomer && (
+          {selectedCustomerAnalytics && (
             <div className="space-y-6">
               {/* Customer Info */}
               <div className="grid grid-cols-2 gap-4 border-b pb-4">
                 <div>
-                  <p className="text-sm text-muted-foreground">Customer Name</p>
-                  <p className="text-lg font-semibold">{selectedCustomer.customer.name}</p>
+                  <p className="text-sm text-muted-foreground">Name</p>
+                  <p className="text-lg font-semibold">{selectedCustomerAnalytics.customer.name}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Phone</p>
+                  <p className="text-lg font-semibold">{selectedCustomerAnalytics.customer.phone || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Address</p>
+                  <p className="text-lg font-semibold">{selectedCustomerAnalytics.customer.address || "—"}</p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Total Spent</p>
                   <p className="text-lg font-semibold">
-                    {formatRupiah(selectedCustomer.totalSpent)}
+                    {formatRupiah(selectedCustomerAnalytics.totalSpent)}
                   </p>
                 </div>
               </div>
@@ -341,14 +518,16 @@ export default function Customers() {
                 <Card>
                   <CardContent className="pt-4">
                     <p className="text-sm text-muted-foreground">Total Purchases</p>
-                    <p className="text-2xl font-bold">{selectedCustomer.purchaseCount}</p>
+                    <p className="text-2xl font-bold">{selectedCustomerAnalytics.purchaseCount}</p>
                   </CardContent>
                 </Card>
                 <Card>
                   <CardContent className="pt-4">
                     <p className="text-sm text-muted-foreground">Average Order</p>
                     <p className="text-2xl font-bold">
-                      {formatRupiah(selectedCustomer.totalSpent / selectedCustomer.purchaseCount)}
+                      {formatRupiah(
+                        selectedCustomerAnalytics.totalSpent / Math.max(selectedCustomerAnalytics.purchaseCount, 1)
+                      )}
                     </p>
                   </CardContent>
                 </Card>
@@ -356,83 +535,79 @@ export default function Customers() {
                   <CardContent className="pt-4">
                     <p className="text-sm text-muted-foreground">Last Purchase</p>
                     <p className="text-lg font-bold">
-                      {selectedCustomer.lastPurchase
-                        ? format(new Date(selectedCustomer.lastPurchase), "dd MMM")
+                      {selectedCustomerAnalytics.lastPurchase
+                        ? format(new Date(selectedCustomerAnalytics.lastPurchase), "dd MMM")
                         : "N/A"}
                     </p>
                   </CardContent>
                 </Card>
               </div>
 
-              {/* Favorite Products */}
-              <div>
-                <h3 className="text-lg font-semibold mb-3">Favorite Products</h3>
-                <div className="border rounded-lg overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted">
-                        <TableHead>Product</TableHead>
-                        <TableHead className="text-right">Qty Purchased</TableHead>
-                        <TableHead className="text-right">Total Spent</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {selectedCustomer.favoriteProducts.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={3} className="text-center text-muted-foreground py-4">
-                            No products purchased
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        selectedCustomer.favoriteProducts.map((product) => (
-                          <TableRow key={product.productId}>
-                            <TableCell className="font-medium">{product.name}</TableCell>
-                            <TableCell className="text-right">{product.quantity}</TableCell>
-                            <TableCell className="text-right font-semibold">
-                              {formatRupiah(product.spent)}
-                            </TableCell>
+              {selectedCustomerAnalytics.purchaseCount > 0 && (
+                <>
+                  {/* Favorite Products */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Favorite Products</h3>
+                    <div className="border rounded-lg overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted">
+                            <TableHead>Product</TableHead>
+                            <TableHead className="text-right">Qty Purchased</TableHead>
+                            <TableHead className="text-right">Total Spent</TableHead>
                           </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
+                        </TableHeader>
+                        <TableBody>
+                          {selectedCustomerAnalytics.favoriteProducts.map((product) => (
+                            <TableRow key={product.productId}>
+                              <TableCell className="font-medium">{product.name}</TableCell>
+                              <TableCell className="text-right">{product.quantity}</TableCell>
+                              <TableCell className="text-right font-semibold">
+                                {formatRupiah(product.spent)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
 
-              {/* Purchase History */}
-              <div>
-                <h3 className="text-lg font-semibold mb-3">Purchase History</h3>
-                <div className="border rounded-lg overflow-hidden">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-muted">
-                        <TableHead>Date</TableHead>
-                        <TableHead>Items</TableHead>
-                        <TableHead>Payment Method</TableHead>
-                        <TableHead className="text-right">Total</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {[...selectedCustomer.sales]
-                        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-                        .map((sale) => (
-                          <TableRow key={sale.id}>
-                            <TableCell className="text-sm">
-                              {format(new Date(sale.createdAt), "dd MMM yyyy, HH:mm")}
-                            </TableCell>
-                            <TableCell className="text-sm">{sale.items.length} item(s)</TableCell>
-                            <TableCell className="text-sm capitalize">
-                              {sale.paymentMethod?.replace(/-/g, " ") || "N/A"}
-                            </TableCell>
-                            <TableCell className="text-right font-semibold">
-                              {formatRupiah(sale.totalAmount || 0)}
-                            </TableCell>
+                  {/* Purchase History */}
+                  <div>
+                    <h3 className="text-lg font-semibold mb-3">Purchase History</h3>
+                    <div className="border rounded-lg overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted">
+                            <TableHead>Date</TableHead>
+                            <TableHead>Items</TableHead>
+                            <TableHead>Payment Method</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
                           </TableRow>
-                        ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
+                        </TableHeader>
+                        <TableBody>
+                          {[...selectedCustomerAnalytics.sales]
+                            .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+                            .map((sale) => (
+                              <TableRow key={sale.id}>
+                                <TableCell className="text-sm">
+                                  {format(new Date(sale.createdAt || ""), "dd MMM yyyy, HH:mm")}
+                                </TableCell>
+                                <TableCell className="text-sm">{sale.items.length} item(s)</TableCell>
+                                <TableCell className="text-sm capitalize">
+                                  {sale.paymentMethod?.replace(/-/g, " ") || "N/A"}
+                                </TableCell>
+                                <TableCell className="text-right font-semibold">
+                                  {formatRupiah(sale.totalAmount || 0)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -443,6 +618,27 @@ export default function Customers() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Customer</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete {deleteTarget?.name}? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
