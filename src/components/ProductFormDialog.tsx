@@ -27,15 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { Product } from "@/types";
-
-const DEFAULT_CATEGORIES = [
-  "Ayam Potong",
-  "Ayam Kampung",
-  "Bebek",
-  "Jeroan",
-  "Olahan",
-  "Lainnya",
-];
+import { CATEGORIES } from "@/lib/recordSaleUtils";
 
 const batchSchema = z.object({
   quantity: z.coerce.number().min(1, "Min 1"),
@@ -75,9 +67,6 @@ export function ProductFormDialog({
   isSubmitting = false,
 }: ProductFormDialogProps) {
   const isEdit = !!product;
-  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
-  const [newCategoryInput, setNewCategoryInput] = useState("");
-  const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
   const form = useForm<ProductFormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -93,8 +82,6 @@ export function ProductFormDialog({
 
   useEffect(() => {
     if (!open) {
-      setShowNewCategoryInput(false);
-      setNewCategoryInput("");
       return;
     }
     if (product) {
@@ -127,14 +114,6 @@ export function ProductFormDialog({
   }, [open, product, form]);
 
   const batches = form.watch("batches");
-  const categoryValue = form.watch("category");
-
-  // Show input when "__new__" is selected
-  useEffect(() => {
-    if (categoryValue === "__new__") {
-      setShowNewCategoryInput(true);
-    }
-  }, [categoryValue]);
 
   const addBatch = () => {
     form.setValue("batches", [...batches, defaultBatch()]);
@@ -192,57 +171,18 @@ export function ProductFormDialog({
                 <FormItem>
                   <FormLabel>Category</FormLabel>
                   <FormControl>
-                    <div className="space-y-2">
-                      <Select value={field.value} onValueChange={field.onChange}>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {categories.map((cat) => (
-                            <SelectItem key={cat} value={cat}>
-                              {cat}
-                            </SelectItem>
-                          ))}
-                          <SelectItem value="__new__">+ Add new category</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {showNewCategoryInput && (
-                        <div className="flex gap-2">
-                          <Input
-                            placeholder="New category name"
-                            value={newCategoryInput}
-                            onChange={(e) => setNewCategoryInput(e.target.value)}
-                          />
-                          <Button
-                            type="button"
-                            size="sm"
-                            onClick={() => {
-                              if (newCategoryInput.trim()) {
-                                const newCat = newCategoryInput.trim();
-                                setCategories([...categories, newCat]);
-                                field.onChange(newCat);
-                                setNewCategoryInput("");
-                                setShowNewCategoryInput(false);
-                              }
-                            }}
-                          >
-                            Add
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setShowNewCategoryInput(false);
-                              setNewCategoryInput("");
-                              field.onChange(categories[0]);
-                            }}
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      )}
-                    </div>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {CATEGORIES.filter(cat => cat.value !== "all").map((cat) => (
+                          <SelectItem key={cat.value} value={cat.value}>
+                            {cat.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </FormControl>
                   <FormMessage />
                 </FormItem>

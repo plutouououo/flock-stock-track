@@ -15,6 +15,7 @@ import RecordSale from "./pages/RecordSale";
 import Reports from "./pages/Reports";
 import ShoppingList from "./pages/ShoppingList";
 import Customers from "./pages/Customers";
+import Expenses from "./pages/Expenses";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -76,6 +77,10 @@ const App = () => {
               <Route
                 path="/customers"
                 element={<RoleProtectedRoute requiredRole="owner"><Customers /></RoleProtectedRoute>}
+              />
+              <Route
+                path="/expenses"
+                element={<RoleProtectedRoute requiredRole="owner"><Expenses /></RoleProtectedRoute>}
               />
               
               {/* Cashier-accessible routes */}

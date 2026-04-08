@@ -39,7 +39,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { useSales, useProducts, useExpenses, useSettings, useDeleteSale, useUpdateSale, useUpdateSaleItems } from "@/lib/queries";
+import { useSales, useProducts, useExpenses, useSettings, useCustomers, useDeleteSale, useUpdateSale, useUpdateSaleItems } from "@/lib/queries";
 import { format, subDays, startOfDay, startOfWeek, startOfMonth, startOfYear, isWithinInterval } from "date-fns";
 import type { Sale, SaleItem } from "@/types";
 import * as XLSX from "xlsx";
@@ -58,6 +58,7 @@ export default function Reports() {
   const { data: products = [] } = useProducts();
   const { data: expenses = [] } = useExpenses();
   const { data: settings = [] } = useSettings();
+  const { data: customers = [] } = useCustomers();
 
   // Mutations
   const deleteSaleMutation = useDeleteSale();
@@ -174,9 +175,11 @@ export default function Reports() {
 
   const customerNameMap = useMemo(() => {
     const map: Record<string, string> = {};
-    // Map customer IDs to names - use customerType as fallback
+    customers.forEach(c => {
+      map[c.id] = c.name;
+    });
     return map;
-  }, []);
+  }, [customers]);
 
   const productMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -274,7 +277,7 @@ export default function Reports() {
       const revenue = monthSales.reduce((sum, s) => sum + s.totalAmount, 0);
       const monthExpenses = expenses.filter(e => e.createdAt.startsWith(month));
       const expense = monthExpenses.reduce((sum, e) => sum + e.amount, 0);
-      months.push({ month: format(date, "MMM"), revenue, expenses: expense });
+      months.push({ month: format(date, "MMM yy"), revenue, expenses: expense });
     }
     return months;
   }, [filteredSales, expenses]);
@@ -305,13 +308,15 @@ export default function Reports() {
     const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
     XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
     const salesData = filteredSales.map(s => [
+      s.id,
       s.createdAt,
       getDisplayCustomerName(s),
       s.items.length,
       s.totalAmount,
       s.paymentMethod,
+      s.shippingCost ? formatRupiah(s.shippingCost) : "-",
     ]);
-    salesData.unshift(["Date", "Customer", "Items Count", "Total", "Payment Method"]);
+    salesData.unshift(["Sale ID", "Date", "Customer", "Items Count", "Total", "Payment Method", "Shipping"]);
     const wsSales = XLSX.utils.aoa_to_sheet(salesData);
     XLSX.utils.book_append_sheet(wb, wsSales, "Sales Details");
     XLSX.writeFile(wb, `reports-${format(new Date(), "yyyy-MM-dd")}.xlsx`);
@@ -519,7 +524,7 @@ export default function Reports() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Time</TableHead>
-                    <TableHead>Customer</TableHead>
+                    <TableHead>Customer Type</TableHead>
                     <TableHead>Payment</TableHead>
                     <TableHead className="text-right">Total</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -741,8 +746,8 @@ export default function Reports() {
                       {/* Transaction Information */}
                       <div className="grid grid-cols-2 gap-4 border-b pb-4">
                         <div>
-                          <p className="text-sm text-muted-foreground">Cashier ID</p>
-                          <p className="text-lg font-semibold">{viewingSale.cashierId || "System"}</p>
+                          <p className="text-sm text-muted-foreground">Customer</p>
+                          <p className="text-lg font-semibold">{getDisplayCustomerName(viewingSale)}</p>
                         </div>
                         <div>
                           <p className="text-sm text-muted-foreground">Customer Type</p>
@@ -761,6 +766,15 @@ export default function Reports() {
                           <p className="text-lg font-semibold">{formatRupiah(viewingSale.paymentNominal || 0)}</p>
                         </div>
                       </div>
+
+                      {viewingSale.shippingCost && (
+                        <div className="grid grid-cols-1 gap-4 border-b pb-4">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Shipping Cost</p>
+                            <p className="text-lg font-semibold">{formatRupiah(viewingSale.shippingCost)}</p>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Sales Items */}
                       <div>
@@ -812,6 +826,14 @@ export default function Reports() {
                             )}
                           </span>
                         </div>
+                        {viewingSale.shippingCost && (
+                          <div className="flex justify-between items-center mb-2">
+                            <span className="text-muted-foreground">Shipping Cost</span>
+                            <span className="font-semibold">
+                              {formatRupiah(viewingSale.shippingCost)}
+                            </span>
+                          </div>
+                        )}
                         <div className="border-t pt-3">
                           <div className="flex justify-between items-center">
                             <span className="text-lg font-semibold">Total Amount</span>

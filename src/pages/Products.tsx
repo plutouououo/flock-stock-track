@@ -11,9 +11,10 @@ import { useProducts, useAddProduct, useUpdateProduct, useDeleteProduct, queryKe
 import { useAuth } from "@/hooks/useAuth";
 import { getProductStock, addProduct as addProductStorage } from "@/lib/storage";
 import { parseProductXls, type ProductImportRow } from "@/lib/import-xls";
-import type { Product, ProductBatch } from "@/types";
+import type { Product, ProductBatch, ProductCategory } from "@/types";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { CATEGORIES } from "@/lib/recordSaleUtils";
 
 function formatRupiah(n: number): string {
   return new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", maximumFractionDigits: 0 }).format(n);
@@ -33,6 +34,7 @@ export default function Products() {
   const deleteProduct = useDeleteProduct();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<ProductCategory | "all">("all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
@@ -71,14 +73,27 @@ export default function Products() {
   }, [products]);
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return products;
-    const q = search.trim().toLowerCase();
-    return products.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.sku.toLowerCase().includes(q)
-    );
-  }, [products, search]);
+    let result = products;
+    
+    // Search filter
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      result = result.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.sku.toLowerCase().includes(q)
+      );
+    }
+    
+    // Category filter
+    if (categoryFilter !== "all") {
+      result = result.filter(
+        (p) => p.category === categoryFilter
+      );
+    }
+    
+    return result;
+  }, [products, search, categoryFilter]);
 
   const handleSubmit = (values: ProductFormValues) => {
     const now = new Date().toISOString();
@@ -152,25 +167,8 @@ export default function Products() {
     setDialogOpen(true);
   };
 
-  const handleDelete = async (p: Product) => {
-    try {
-      const stock = await getProductStock(p);
-      if (stock > 0) {
-        toast({
-          title: "Cannot delete",
-          description: "Reduce stock to zero first or remove batches.",
-          variant: "destructive",
-        });
-        return;
-      }
-      setDeleteTarget(p);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to check product stock",
-        variant: "destructive",
-      });
-    }
+  const handleDelete = (p: Product) => {
+    setDeleteTarget(p);
   };
 
   const confirmDelete = () => {
@@ -307,6 +305,22 @@ export default function Products() {
         />
       </div>
 
+      <div className="flex gap-2 overflow-x-auto pb-2">
+        {CATEGORIES.map(cat => (
+          <button
+            key={cat.value}
+            onClick={() => setCategoryFilter(cat.value as ProductCategory | "all")}
+            className={`px-3 py-1.5 rounded-full text-xs whitespace-nowrap border transition-colors shrink-0 ${
+              categoryFilter === cat.value
+                ? "bg-primary text-primary-foreground border-primary"
+                : "border-border text-muted-foreground hover:border-foreground"
+            }`}
+          >
+            {cat.label}
+          </button>
+        ))}
+      </div>
+
       <div className="card-elevated-md overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -326,6 +340,7 @@ export default function Products() {
               <TableRow>
                 <TableHead className="w-12">Image</TableHead>
                 <TableHead>Name</TableHead>
+                <TableHead>Category</TableHead>
                 <TableHead className="min-w-[120px]">SKU</TableHead>
                 <TableHead className="text-right">Price</TableHead>
                 <TableHead className="text-right">Stock</TableHead>
@@ -357,6 +372,7 @@ export default function Products() {
                         {p.name}
                       </span>
                     </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{p.category || "—"}</TableCell>
                     <TableCell className="font-mono text-sm min-w-[120px]">{p.sku}</TableCell>
                     <TableCell className="text-right">{formatRupiah(p.price)}</TableCell>
                     <TableCell className="text-right">
